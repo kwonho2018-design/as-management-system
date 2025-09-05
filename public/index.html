@@ -923,14 +923,29 @@
                     const importStats = { general: 0, converter: 0, floodlight: 0 };
 
                     jsonData.forEach(row => {
-                        // 카테고리 결정
+                        // 카테고리 결정 로직 개선
                         let category = null;
+                        
+                        // 1. 시스템 컬럼 우선 확인 (정확한 매칭)
                         if (row['시스템']) {
-                            const s = String(row['시스템']).toLowerCase();
-                            if (s.includes('기타')) category = 'general';
-                            else if (s.includes('컨버터')) category = 'converter';
-                            else if (s.includes('투광')) category = 'floodlight';
+                            const systemValue = String(row['시스템']).trim();
+                            if (systemValue === '컨버터') {
+                                category = 'converter';
+                            } else if (systemValue === '투광등') {
+                                category = 'floodlight';
+                            } else if (systemValue === '기타제품') {
+                                // 기타제품이지만 실제로는 다른 카테고리일 수 있으므로 추가 확인
+                                if (row['컨버터 번호'] || row['컨버터 코드'] || row['설치 위치']) {
+                                    category = 'converter';
+                                } else if (row['제품명'] && String(row['제품명']).toLowerCase().includes('투광')) {
+                                    category = 'floodlight';
+                                } else {
+                                    category = 'general';
+                                }
+                            }
                         }
+                        
+                        // 2. 시스템 컬럼이 없거나 인식되지 않은 경우 필드 기반 분류
                         if (!category) {
                             if (row['컨버터 번호'] || row['컨버터 코드'] || row['설치 위치']) {
                                 category = 'converter';
