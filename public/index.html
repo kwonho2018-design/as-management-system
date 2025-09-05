@@ -16,6 +16,37 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
     <!-- SheetJS xlsx 0.18.5 CDN -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- Firebase 9 SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
+        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js';
+        
+        // Firebase 설정 (공개 데이터베이스)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDY8Q7mYJg1x7Wn9Z7K5JL6nN0P8QR2sT4",
+            authDomain: "as-management-demo.firebaseapp.com",
+            projectId: "as-management-demo",
+            storageBucket: "as-management-demo.appspot.com",
+            messagingSenderId: "123456789012",
+            appId: "1:123456789012:web:abc123def456ghi789"
+        };
+
+        // Firebase 초기화
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        
+        // 전역으로 설정
+        window.firebaseDB = db;
+        window.firebaseOperations = {
+            collection,
+            addDoc,
+            getDocs,
+            doc,
+            updateDoc,
+            deleteDoc,
+            setDoc
+        };
+    </script>
 
     <style>
         body {
@@ -75,6 +106,7 @@
         }
         .drag-drop-zone.dragover { background-color: rgba(75, 85, 99, 0.4); }
 
+        /* A/S Specific Styles */
         .as-sub-nav-btn {
             padding: 0.5rem 1rem;
             border-radius: 0.5rem;
@@ -89,18 +121,28 @@
         .as-sub-tab-content { display: none; }
         .as-sub-tab-content.active { display: block; }
 
-        .loading {
-            display: inline-block;
+        .loading-spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid #3b82f6;
             width: 20px;
             height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
+            animation: spin 1s linear infinite;
         }
+
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
+
+        .status-indicator {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-online { background-color: #10b981; color: white; }
+        .status-offline { background-color: #ef4444; color: white; }
     </style>
 </head>
 <body>
@@ -111,9 +153,10 @@
                 <div class="flex items-center space-x-3">
                     <i class="fas fa-tools text-2xl text-blue-400"></i>
                     <h1 class="text-2xl font-bold text-white">A/S 통합 관리 시스템</h1>
-                    <div id="connection-status" class="ml-4 text-sm"></div>
+                    <div id="connection-status" class="status-indicator status-offline">오프라인</div>
                 </div>
                 <div class="flex items-center space-x-4">
+                    <div id="loading-indicator" class="loading-spinner" style="display: none;"></div>
                     <button onclick="downloadHTML()" class="py-2 px-4 rounded-md btn-primary text-sm">
                         <i class="fas fa-download mr-2"></i>현재 상태 저장 (HTML)
                     </button>
@@ -160,6 +203,7 @@
 
     <script>
         // --- Global State ---
+        let isOnline = false;
         const appData = {
             as: {
                 general: [],
@@ -192,270 +236,12 @@
             integratedStatusFilter: 'all'
         };
 
-        // --- Config - 원본과 동일한 한글 키 사용 ---
+        // --- Config ---
         const AS_CONFIG = {
-            general: { 
-                name: '기타제품', 
-                fields: { 
-                    'NO.': 'NO.', 
-                    '구분': '구분', 
-                    '클레임 NO.': '클레임NO', 
-                    '호선번호': '호선번호', 
-                    '불량 자재코드': '불량자재코드', 
-                    '대체 자재 코드': '대체자재코드', 
-                    '제품명': '제품명', 
-                    '수량': '수량', 
-                    '접수일': '접수일', 
-                    '완료일': '완료일', 
-                    '비고': '비고' 
-                } 
-            },
-            converter: { 
-                name: '컨버터', 
-                fields: { 
-                    'NO.': 'NO.', 
-                    '구분': '구분', 
-                    '클레임 NO.': '클레임NO', 
-                    '호선번호': '호선번호', 
-                    '컨버터 번호': '컨버터번호', 
-                    '컨버터 코드': '컨버터코드', 
-                    '설치 위치': '설치위치', 
-                    '제품명': '제품명', 
-                    '수량': '수량', 
-                    '접수일': '접수일', 
-                    '완료일': '완료일', 
-                    '비고': '비고' 
-                } 
-            },
-            floodlight: { 
-                name: '투광등', 
-                fields: { 
-                    'NO.': 'NO.', 
-                    '구분': '구분', 
-                    '클레임 NO.': '클레임NO', 
-                    '호선번호': '호선번호', 
-                    '불량 자재코드': '불량자재코드', 
-                    '대체 자재 코드': '대체자재코드', 
-                    '제품명': '제품명', 
-                    '수량': '수량', 
-                    '접수일': '접수일', 
-                    '완료일': '완료일', 
-                    '비고': '비고' 
-                } 
-            }
+            general: { name: '기타제품', store: 'as_general', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '불량 자재코드': '불량자재코드', '대체 자재 코드': '대체자재코드', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } },
+            converter: { name: '컨버터', store: 'as_converter', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '컨버터 번호': '컨버터번호', '컨버터 코드': '컨버터코드', '설치 위치': '설치위치', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } },
+            floodlight: { name: '투광등', store: 'as_floodlight', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '불량 자재코드': '불량자재코드', '대체 자재 코드': '대체자재코드', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } }
         };
-
-        // DB 필드 매핑
-        const DB_FIELD_MAP = {
-            general: {
-                'NO.': 'no',
-                '구분': 'division',
-                '클레임NO': 'claim_no',
-                '호선번호': 'hull_number',
-                '불량자재코드': 'defective_material_code',
-                '대체자재코드': 'alternative_material_code',
-                '제품명': 'product_name',
-                '수량': 'quantity',
-                '접수일': 'receipt_date',
-                '완료일': 'completion_date',
-                '비고': 'notes'
-            },
-            converter: {
-                'NO.': 'no',
-                '구분': 'division',
-                '클레임NO': 'claim_no',
-                '호선번호': 'hull_number',
-                '컨버터번호': 'converter_number',
-                '컨버터코드': 'converter_code',
-                '설치위치': 'installation_location',
-                '제품명': 'product_name',
-                '수량': 'quantity',
-                '접수일': 'receipt_date',
-                '완료일': 'completion_date',
-                '비고': 'notes'
-            },
-            floodlight: {
-                'NO.': 'no',
-                '구분': 'division',
-                '클레임NO': 'claim_no',
-                '호선번호': 'hull_number',
-                '불량자재코드': 'defective_material_code',
-                '대체자재코드': 'alternative_material_code',
-                '제품명': 'product_name',
-                '수량': 'quantity',
-                '접수일': 'receipt_date',
-                '완료일': 'completion_date',
-                '비고': 'notes'
-            }
-        };
-
-        // --- API Functions ---
-        const API_BASE = '';
-
-        async function apiCall(endpoint, options = {}) {
-            try {
-                updateConnectionStatus(true);
-                const response = await fetch(API_BASE + endpoint, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...options.headers
-                    },
-                    ...options
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || `HTTP ${response.status}`);
-                }
-
-                updateConnectionStatus(false);
-                return await response.json();
-            } catch (error) {
-                updateConnectionStatus(false, true);
-                console.error('API Error:', error);
-                throw error;
-            }
-        }
-
-        function updateConnectionStatus(loading = false, error = false) {
-            const statusEl = document.getElementById('connection-status');
-            if (loading) {
-                statusEl.innerHTML = '<div class="loading"></div> <span class="text-yellow-300">연결 중...</span>';
-            } else if (error) {
-                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle text-red-400"></i> <span class="text-red-400">연결 오류</span>';
-            } else {
-                statusEl.innerHTML = '<i class="fas fa-check-circle text-green-400"></i> <span class="text-green-400">연결됨</span>';
-            }
-        }
-
-        // DB 데이터를 프론트엔드 형식으로 변환
-        function dbToFrontend(dbItem, category) {
-            const item = { id: dbItem.id, status: dbItem.status };
-            const fieldMap = DB_FIELD_MAP[category];
-            
-            for (const [frontendKey, dbKey] of Object.entries(fieldMap)) {
-                item[frontendKey] = dbItem[dbKey] || '';
-            }
-            
-            return item;
-        }
-
-        // 프론트엔드 데이터를 DB 형식으로 변환
-        function frontendToDb(frontendItem, category) {
-            const dbItem = { status: frontendItem.status || 'incomplete' };
-            const fieldMap = DB_FIELD_MAP[category];
-            
-            for (const [frontendKey, dbKey] of Object.entries(fieldMap)) {
-                if (frontendItem[frontendKey] !== undefined) {
-                    dbItem[dbKey] = frontendItem[frontendKey];
-                }
-            }
-            
-            return dbItem;
-        }
-
-        async function loadAllData() {
-            try {
-                const promises = Object.keys(AS_CONFIG).map(async category => {
-                    const dbData = await apiCall(`/api/data/${category}`);
-                    appData.as[category] = dbData.map(item => dbToFrontend(item, category));
-                });
-
-                const activities = await apiCall('/api/activities');
-                appData.recentActivities = activities;
-
-                await Promise.all(promises);
-            } catch (error) {
-                console.error('데이터 로드 실패:', error);
-                showConfirm('서버에서 데이터를 불러올 수 없습니다. 연결을 확인해주세요.', () => {});
-            }
-        }
-
-        async function saveItem(category, item) {
-            const dbItem = frontendToDb(item, category);
-            
-            if (item.id && item.id > 0) {
-                const result = await apiCall(`/api/data/${category}/${item.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(dbItem)
-                });
-                return dbToFrontend({id: item.id, ...result}, category);
-            } else {
-                const result = await apiCall(`/api/data/${category}`, {
-                    method: 'POST',
-                    body: JSON.stringify(dbItem)
-                });
-                return dbToFrontend(result, category);
-            }
-        }
-
-        async function deleteItem(category, id) {
-            return await apiCall(`/api/data/${category}/${id}`, {
-                method: 'DELETE'
-            });
-        }
-
-        async function clearCategoryData(category) {
-            return await apiCall(`/api/data/${category}`, {
-                method: 'DELETE'
-            });
-        }
-
-        async function bulkSave(category, items, clearFirst = false) {
-            const dbItems = items.map(item => frontendToDb(item, category));
-            return await apiCall(`/api/bulk/${category}`, {
-                method: 'POST',
-                body: JSON.stringify({ items: dbItems, clearFirst })
-            });
-        }
-
-        async function reindexCategory(category) {
-            return await apiCall(`/api/reindex/${category}`, {
-                method: 'POST'
-            });
-        }
-
-        function asReindex(category) {
-            const list = appData.as[category];
-            list.sort((a, b) => (parseInt(a['NO.']) || 0) - (parseInt(b['NO.']) || 0));
-            list.forEach((item, idx) => {
-                item['NO.'] = idx + 1;
-            });
-        }
-
-        function asGetNextNo(category) {
-            const list = appData.as[category];
-            return list.length ? Math.max(...list.map(i => +i['NO.'] || 0)) + 1 : 1;
-        }
-
-        async function addRecentActivity(type, message, itemName) {
-            const icons = {
-                'AS': 'fas fa-tools',
-                'ASImport': 'fas fa-file-import',
-                'ASExport': 'fas fa-file-export',
-                'ASComplete': 'fas fa-check-circle',
-                'System': 'fas fa-info-circle'
-            };
-
-            try {
-                const activity = await apiCall('/api/activities', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        type,
-                        message,
-                        itemName,
-                        icon: icons[type] || 'fas fa-bell'
-                    })
-                });
-
-                appData.recentActivities.unshift(activity);
-                if (appData.recentActivities.length > 50) {
-                    appData.recentActivities.pop();
-                }
-            } catch (error) {
-                console.error('활동 기록 실패:', error);
-            }
-        }
 
         // --- Utility Functions ---
         function getTodayString() {
@@ -489,8 +275,197 @@
                 .replace(/"/g, "&quot;");
         }
 
+        function showLoading() {
+            document.getElementById('loading-indicator').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-indicator').style.display = 'none';
+        }
+
+        function updateConnectionStatus(online) {
+            isOnline = online;
+            const statusEl = document.getElementById('connection-status');
+            if (online) {
+                statusEl.textContent = '온라인';
+                statusEl.className = 'status-indicator status-online';
+            } else {
+                statusEl.textContent = '오프라인';
+                statusEl.className = 'status-indicator status-offline';
+            }
+        }
+
+        // --- Firebase Operations ---
+        async function initFirebase() {
+            try {
+                // Firebase 모듈이 로드될 때까지 대기
+                let attempts = 0;
+                while (!window.firebaseDB && attempts < 50) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    attempts++;
+                }
+                
+                if (!window.firebaseDB) {
+                    throw new Error('Firebase 초기화 실패');
+                }
+                
+                updateConnectionStatus(true);
+                return true;
+            } catch (error) {
+                console.error('Firebase 초기화 오류:', error);
+                updateConnectionStatus(false);
+                return false;
+            }
+        }
+
+        async function loadAllDataFromFirebase() {
+            if (!window.firebaseDB || !isOnline) return;
+            
+            showLoading();
+            try {
+                const { collection, getDocs } = window.firebaseOperations;
+                
+                // 각 카테고리별 데이터 로드
+                for (const category of Object.keys(AS_CONFIG)) {
+                    const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
+                    appData.as[category] = [];
+                    querySnapshot.forEach((doc) => {
+                        appData.as[category].push({ id: doc.id, ...doc.data() });
+                    });
+                    asReindex(category);
+                }
+
+                // 최근 활동 로드
+                const activitiesSnapshot = await getDocs(collection(window.firebaseDB, 'recentActivities'));
+                appData.recentActivities = [];
+                activitiesSnapshot.forEach((doc) => {
+                    appData.recentActivities.push({ id: doc.id, ...doc.data() });
+                });
+                appData.recentActivities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            } catch (error) {
+                console.error('데이터 로드 오류:', error);
+                updateConnectionStatus(false);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function saveItemToFirebase(category, item) {
+            if (!window.firebaseDB || !isOnline) return;
+            
+            try {
+                const { doc, setDoc } = window.firebaseOperations;
+                await setDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id)), item);
+            } catch (error) {
+                console.error('데이터 저장 오류:', error);
+                throw error;
+            }
+        }
+
+        async function deleteItemFromFirebase(category, itemId) {
+            if (!window.firebaseDB || !isOnline) return;
+            
+            try {
+                const { doc, deleteDoc } = window.firebaseOperations;
+                await deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(itemId)));
+            } catch (error) {
+                console.error('데이터 삭제 오류:', error);
+                throw error;
+            }
+        }
+
+        async function saveBulkDataToFirebase(category, items) {
+            if (!window.firebaseDB || !isOnline) return;
+            
+            showLoading();
+            try {
+                const { doc, setDoc } = window.firebaseOperations;
+                const promises = items.map(item => 
+                    setDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id)), item)
+                );
+                await Promise.all(promises);
+            } catch (error) {
+                console.error('대량 데이터 저장 오류:', error);
+                throw error;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function clearCategoryInFirebase(category) {
+            if (!window.firebaseDB || !isOnline) return;
+            
+            showLoading();
+            try {
+                const { collection, getDocs, deleteDoc, doc } = window.firebaseOperations;
+                const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
+                const deletePromises = [];
+                querySnapshot.forEach((docSnapshot) => {
+                    deletePromises.push(deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, docSnapshot.id)));
+                });
+                await Promise.all(deletePromises);
+            } catch (error) {
+                console.error('카테고리 데이터 삭제 오류:', error);
+                throw error;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // --- Recent Activities ---
+        async function addRecentActivity(type, message, itemName) {
+            const activity = {
+                id: Date.now(),
+                type,
+                message,
+                itemName,
+                timestamp: Date.now(),
+                icon: getActivityIcon(type)
+            };
+            
+            appData.recentActivities.unshift(activity);
+            if (appData.recentActivities.length > 50) {
+                appData.recentActivities.pop();
+            }
+            
+            if (isOnline) {
+                try {
+                    const { doc, setDoc } = window.firebaseOperations;
+                    await setDoc(doc(window.firebaseDB, 'recentActivities', String(activity.id)), activity);
+                } catch (error) {
+                    console.error('활동 저장 오류:', error);
+                }
+            }
+        }
+
+        function getActivityIcon(type) {
+            const icons = {
+                'AS': 'fas fa-tools',
+                'ASImport': 'fas fa-file-import',
+                'ASExport': 'fas fa-file-export',
+                'ASComplete': 'fas fa-check-circle',
+                'System': 'fas fa-info-circle'
+            };
+            return icons[type] || 'fas fa-bell';
+        }
+
+        // --- Common AS Functions ---
+        function asReindex(category) {
+            const list = appData.as[category];
+            list.sort((a, b) => (parseInt(a['NO.']) || 0) - (parseInt(b['NO.']) || 0));
+            list.forEach((item, idx) => {
+                item['NO.'] = idx + 1;
+            });
+        }
+
+        function asGetNextNo(category) {
+            const list = appData.as[category];
+            return list.length ? Math.max(...list.map(i => +i['NO.'] || 0)) + 1 : 1;
+        }
+
         // --- UI Functions ---
-        async function showAsSubTab(tab) {
+        function showAsSubTab(tab) {
             asState.activeTab = tab;
             asState.activeCategory = (tab === 'dashboard' || tab === 'integrated') ? null : tab;
 
@@ -503,20 +478,20 @@
 
             switch(tab) {
                 case 'dashboard':
-                    await renderAsDashboard();
+                    renderAsDashboard();
                     break;
                 case 'general':
                 case 'converter':
                 case 'floodlight':
-                    await renderAsCategory(tab);
+                    renderAsCategory(tab);
                     break;
                 case 'integrated':
-                    await renderAsIntegrated();
+                    renderAsIntegrated();
                     break;
             }
         }
 
-        async function renderAsDashboard() {
+        function renderAsDashboard() {
             const container = document.getElementById('as-dashboard-content');
             if(!container) return;
 
@@ -535,19 +510,6 @@
                 return { name: AS_CONFIG[cat].name, total: catTotal, completed: catCompleted, incomplete: catIncomplete, rate: catRate };
             });
 
-            // 최근 활동 HTML 생성
-            const recentActivitiesHtml = appData.recentActivities.slice(0, 10).map(activity => {
-                return `
-                    <div class="flex items-center p-3 hover:bg-gray-700 hover:bg-opacity-30 rounded">
-                        <i class="${activity.icon} text-blue-400 mr-3"></i>
-                        <div class="flex-1">
-                            <p class="text-sm text-white">${activity.message}</p>
-                            <p class="text-xs text-gray-400">${new Date(activity.timestamp).toLocaleString('ko-KR')}</p>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
             container.innerHTML = `
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                     <div class="glass-card p-5"><p class="text-gray-400">총 A/S 건수</p><p class="text-white text-3xl font-bold">${total}</p></div>
@@ -555,24 +517,16 @@
                     <div class="glass-card p-5"><p class="text-gray-400">미완료 건수</p><p class="text-red-400 text-3xl font-bold">${incomplete}</p></div>
                     <div class="glass-card p-5"><p class="text-gray-400">전체 완료율</p><p class="text-blue-400 text-3xl font-bold">${completionRate}%</p></div>
                 </div>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                    <div class="grid grid-cols-1 gap-6">
-                        ${categoryStats.map(stat => `
-                            <div class="glass-card p-5">
-                                <h3 class="text-lg font-semibold text-white mb-3">${stat.name} 현황</h3>
-                                <div class="flex justify-between items-center text-sm"><span>총계:</span> <span class="font-bold">${stat.total}</span></div>
-                                <div class="flex justify-between items-center text-sm text-green-400"><span>완료:</span> <span class="font-bold">${stat.completed}</span></div>
-                                <div class="flex justify-between items-center text-sm text-red-400"><span>미완료:</span> <span class="font-bold">${stat.incomplete}</span></div>
-                                <div class="flex justify-between items-center text-sm text-blue-400 mt-2"><span>완료율:</span> <span class="font-bold">${stat.rate}%</span></div>
-                            </div>
-                        `).join('')}
-                    </div>
-                    <div class="glass-card p-6">
-                        <h3 class="text-lg font-semibold text-white mb-4">최근 활동</h3>
-                        <div class="space-y-2 max-h-96 overflow-y-auto">
-                            ${recentActivitiesHtml || '<div class="text-center text-gray-400 py-8">최근 활동이 없습니다.</div>'}
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    ${categoryStats.map(stat => `
+                        <div class="glass-card p-5">
+                            <h3 class="text-lg font-semibold text-white mb-3">${stat.name} 현황</h3>
+                            <div class="flex justify-between items-center text-sm"><span>총계:</span> <span class="font-bold">${stat.total}</span></div>
+                            <div class="flex justify-between items-center text-sm text-green-400"><span>완료:</span> <span class="font-bold">${stat.completed}</span></div>
+                            <div class="flex justify-between items-center text-sm text-red-400"><span>미완료:</span> <span class="font-bold">${stat.incomplete}</span></div>
+                            <div class="flex justify-between items-center text-sm text-blue-400 mt-2"><span>완료율:</span> <span class="font-bold">${stat.rate}%</span></div>
                         </div>
-                    </div>
+                    `).join('')}
                 </div>
                 <div class="glass-card p-6">
                     <h3 class="text-xl font-semibold text-white mb-4">제품군별 A/S 현황</h3>
@@ -625,7 +579,7 @@
             }
         }
 
-        async function renderAsCategory(category) {
+        function renderAsCategory(category) {
             const container = document.getElementById(`as-${category}-content`);
             if(!container) return;
 
@@ -746,7 +700,7 @@
                 const isSelected = asState.selectedIds[category].has(r.id);
                 let completionCell = r['완료일'] || '';
                 if (r.status !== 'completed') {
-                    completionCell = `<button class="btn-green py-1 px-2 rounded text-xs" onclick="asOpenCompleteModal('${category}', ${r.id})">완료 처리</button>`;
+                    completionCell = `<button class="btn-green py-1 px-2 rounded text-xs" onclick="asOpenCompleteModal('${category}', '${r.id}')">완료 처리</button>`;
                 }
 
                 const cellsHtml = Object.entries(cfg.fields).map(([label, key]) => {
@@ -766,12 +720,12 @@
 
                 return `
                 <tr class="hover:bg-gray-700 ${isSelected ? 'bg-blue-900/50' : ''}">
-                    <td class="p-2"><input type="checkbox" onchange="asToggleSelectOne(event,'${category}',${r.id})" ${isSelected ? 'checked' : ''}></td>
+                    <td class="p-2"><input type="checkbox" onchange="asToggleSelectOne(event,'${category}','${r.id}')" ${isSelected ? 'checked' : ''}></td>
                     <td class="p-2 text-center">
-                        <button onclick="asOpenAddModal('${category}',${r.id})" class="text-blue-400 hover:text-blue-300"><i class="fas fa-edit"></i></button>
+                        <button onclick="asOpenAddModal('${category}','${r.id}')" class="text-blue-400 hover:text-blue-300"><i class="fas fa-edit"></i></button>
                     </td>
                     <td class="p-2 text-center">
-                        <button onclick="asDeleteSelectedRow('${category}',${r.id})" class="text-red-400 hover:text-red-300"><i class="fas fa-trash"></i></button>
+                        <button onclick="asDeleteSelectedRow('${category}','${r.id}')" class="text-red-400 hover:text-red-300"><i class="fas fa-trash"></i></button>
                     </td>
                     ${cellsHtml}
                 </tr>`;
@@ -796,14 +750,14 @@
             if (category === 'converter') {
                 chartLabel = '컨버터 코드';
                 const counts = data.reduce((acc, item) => {
-                    if (item['컨버터코드']) acc[item['컨버터코드']] = (acc[item['컨버터코드']] || 0) + (parseInt(item['수량']) || 0);
+                    if (item.컨버터코드) acc[item.컨버터코드] = (acc[item.컨버터코드] || 0) + (parseInt(item.수량) || 0);
                     return acc;
                 }, {});
                 top10Data = Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 10);
             } else {
                 chartLabel = '대체 자재 코드';
                 const counts = data.reduce((acc, item) => {
-                    if (item['대체자재코드']) acc[item['대체자재코드']] = (acc[item['대체자재코드']] || 0) + (parseInt(item['수량']) || 0);
+                    if (item.대체자재코드) acc[item.대체자재코드] = (acc[item.대체자재코드] || 0) + (parseInt(item.수량) || 0);
                     return acc;
                 }, {});
                 top10Data = Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 10);
@@ -839,5 +793,1316 @@
             });
         }
 
-        // 나머지 함수들은 원본과 동일하게 구현...
-        // (계속해서 모든 함수를 완전히 구현)
+        function renderAsIntegrated() {
+            const container = document.getElementById('as-integrated-content');
+            if (!container) return;
+
+            const activeSubTab = asState.activeSubTab.integrated;
+            container.innerHTML = `
+                <div class="border-b border-gray-700 mb-4">
+                    <nav class="-mb-px flex space-x-6" aria-label="Tabs">
+                        <button onclick="asSetIntegratedSubTab('data')" class="as-sub-nav-btn ${activeSubTab === 'data' ? 'active' : ''}">데이터</button>
+                        <button onclick="asSetIntegratedSubTab('analysis')" class="as-sub-nav-btn ${activeSubTab === 'analysis' ? 'active' : ''}">통합 분석</button>
+                        <button onclick="asSetIntegratedSubTab('incomplete-list')" class="as-sub-nav-btn ${activeSubTab === 'incomplete-list' ? 'active' : ''}">미완료 제품 리스트</button>
+                    </nav>
+                </div>
+                <div id="as-integrated-subcontent"></div>
+            `;
+            renderAsIntegratedSubContent();
+        }
+
+        function asSetIntegratedSubTab(subTab) {
+            asState.activeSubTab.integrated = subTab;
+            renderAsIntegratedSubContent();
+        }
+
+        function renderAsIntegratedSubContent() {
+            const container = document.getElementById('as-integrated-subcontent');
+            const activeSubTab = asState.activeSubTab.integrated;
+
+            if (activeSubTab === 'analysis') {
+                container.innerHTML = `<div class="glass-card p-6 h-96"><canvas id="as-chart-integrated"></canvas></div>`;
+                renderAsIntegratedAnalysisChart();
+            } else if (activeSubTab === 'incomplete-list') {
+                container.innerHTML = `
+                    <div class="glass-card p-6">
+                        <div id="as-incomplete-list-integrated"></div>
+                    </div>
+                `;
+                renderAsIncompleteList();
+            } else {
+                const selectedCount = asState.selectedIds.integrated.size;
+                container.innerHTML = `
+                    <div class="glass-card p-4">
+                        <!-- 통합 불러오기 -->
+                        <div class="mb-4 p-4 bg-gray-800 rounded-lg">
+                            <div id="as-integrated-drop-zone" class="drag-drop-zone rounded-md" ondragover="handleIntegratedDragOver(event)" ondragleave="handleIntegratedDragLeave(event)" ondrop="handleIntegratedDrop(event)">
+                                <p class="text-white font-semibold mb-2">통합 Excel 파일 불러오기</p>
+                                <p class="text-sm text-gray-400 mb-3">파일을 업로드하면 자동으로 기타제품, 컨버터, 투광등으로 분류됩니다</p>
+                                <input type="file" id="as-integrated-file-input" accept=".xlsx, .xls, .csv" class="hidden" onchange="asHandleIntegratedFileSelect(event)">
+                                <button class="mt-3 btn-primary py-2 px-4 rounded text-sm" onclick="document.getElementById('as-integrated-file-input').click()">
+                                    <i class="fas fa-file-upload mr-2"></i>통합 파일 선택
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-center mb-4 flex-wrap gap-4">
+                            <div class="flex items-center gap-4">
+                                <div class="isolate inline-flex rounded-md shadow-sm">
+                                    <button onclick="asSetIntegratedStatusFilter('all')" class="relative inline-flex items-center rounded-l-md px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedStatusFilter === 'all' ? 'bg-blue-600' : 'bg-gray-800'}">전체</button>
+                                    <button onclick="asSetIntegratedStatusFilter('incomplete')" class="relative -ml-px inline-flex items-center px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedStatusFilter === 'incomplete' ? 'bg-blue-600' : 'bg-gray-800'}">미완료</button>
+                                    <button onclick="asSetIntegratedStatusFilter('completed')" class="relative -ml-px inline-flex items-center rounded-r-md px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedStatusFilter === 'completed' ? 'bg-blue-600' : 'bg-gray-800'}">완료</button>
+                                </div>
+                                <div class="isolate inline-flex rounded-md shadow-sm">
+                                    <button onclick="asSetIntegratedFilter('all')" class="relative inline-flex items-center rounded-l-md px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedFilter === 'all' ? 'bg-blue-600' : 'bg-gray-800'}">전체</button>
+                                    <button onclick="asSetIntegratedFilter('general')" class="relative -ml-px inline-flex items-center px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedFilter === 'general' ? 'bg-blue-600' : 'bg-gray-800'}">기타</button>
+                                    <button onclick="asSetIntegratedFilter('converter')" class="relative -ml-px inline-flex items-center px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedFilter === 'converter' ? 'bg-blue-600' : 'bg-gray-800'}">컨버터</button>
+                                    <button onclick="asSetIntegratedFilter('floodlight')" class="relative -ml-px inline-flex items-center rounded-r-md px-3 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-600 hover:bg-gray-700 focus:z-10 ${asState.integratedFilter === 'floodlight' ? 'bg-blue-600' : 'bg-gray-800'}">투광등</button>
+                                </div>
+                                <button class="btn-red py-2 px-4 rounded-md text-sm" onclick="asDeleteSelected('integrated')" ${selectedCount === 0 ? 'disabled' : ''}><i class="fas fa-trash mr-2"></i>선택 삭제 (${selectedCount})</button>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input type="text" id="as-search-integrated" class="p-2 rounded modal-input" placeholder="통합 검색..." onkeyup="asSearchIntegrated()">
+                                <button class="btn-orange py-2 px-4 rounded-md" onclick="asClearSearchIntegrated()">초기화</button>
+                                <span id="as-search-total-quantity-integrated" class="text-sm text-yellow-300 font-semibold ml-2"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button class="btn-green py-2 px-4 rounded-md text-sm" onclick="asExportIntegrated(false)">전체 내보내기</button>
+                                <button class="btn-green py-2 px-4 rounded-md text-sm" onclick="asExportIntegrated(true)">검색 결과 내보내기</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table id="as-table-integrated" class="min-w-full text-sm text-white"></table>
+                        </div>
+                    </div>
+                `;
+                renderAsIntegratedTable();
+            }
+        }
+
+        // --- 통합 불러오기 함수들 ---
+        function handleIntegratedDragOver(event) {
+            event.preventDefault();
+            document.getElementById('as-integrated-drop-zone').classList.add('dragover');
+        }
+        function handleIntegratedDragLeave(event) {
+            event.preventDefault();
+            document.getElementById('as-integrated-drop-zone').classList.remove('dragover');
+        }
+        function handleIntegratedDrop(event) {
+            event.preventDefault();
+            document.getElementById('as-integrated-drop-zone').classList.remove('dragover');
+            const file = event.dataTransfer.files[0];
+            if (file) asImportIntegratedFromExcel(file);
+        }
+        function asHandleIntegratedFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                asImportIntegratedFromExcel(file);
+                event.target.value = '';
+            }
+        }
+
+        async function asImportIntegratedFromExcel(file) {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[sheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+                    if (!jsonData || jsonData.length === 0) {
+                        showConfirm("파일에 데이터가 없습니다.", () => {});
+                        return;
+                    }
+
+                    const categorizedData = { general: [], converter: [], floodlight: [] };
+                    const importStats = { general: 0, converter: 0, floodlight: 0 };
+
+                    jsonData.forEach(row => {
+                        // 카테고리 결정
+                        let category = null;
+                        if (row['시스템']) {
+                            const s = String(row['시스템']).toLowerCase();
+                            if (s.includes('기타')) category = 'general';
+                            else if (s.includes('컨버터')) category = 'converter';
+                            else if (s.includes('투광')) category = 'floodlight';
+                        }
+                        if (!category) {
+                            if (row['컨버터 번호'] || row['컨버터 코드'] || row['설치 위치']) {
+                                category = 'converter';
+                            } else if (row['제품명'] && String(row['제품명']).toLowerCase().includes('투광')) {
+                                category = 'floodlight';
+                            } else {
+                                category = 'general';
+                            }
+                        }
+
+                        const cfg = AS_CONFIG[category];
+                        const newItem = { id: Date.now() + Math.random() * 1000, status: 'incomplete' };
+
+                        // 공통 필드 매핑
+                        for (const header in cfg.fields) {
+                            const key = cfg.fields[header];
+                            let value = row[header];
+                            if (key === '접수일' || key === '완료일') {
+                                value = formatDate(value);
+                            } else if (key === '수량') {
+                                value = parseInt(value) || 0;
+                            }
+                            newItem[key] = value || '';
+                        }
+                        // 상태 컬럼이 있는 경우 반영
+                        if (row['상태']) {
+                            const st = String(row['상태']).trim();
+                            if (st === '완료' || st.toLowerCase() === 'completed' || st === 'Y') {
+                                newItem.status = 'completed';
+                                if (!newItem['완료일']) newItem['완료일'] = getTodayString();
+                            }
+                        } else if (newItem['완료일']) {
+                            newItem.status = 'completed';
+                        }
+
+                        categorizedData[category].push(newItem);
+                        importStats[category]++;
+                    });
+
+                    showLoading();
+                    for (const category in categorizedData) {
+                        if (categorizedData[category].length > 0) {
+                            appData.as[category].push(...categorizedData[category]);
+                            asReindex(category);
+                            if (isOnline) {
+                                await saveBulkDataToFirebase(category, appData.as[category]);
+                            }
+                        }
+                    }
+                    hideLoading();
+
+                    renderAsDashboard();
+                    renderAsIntegrated();
+                    Object.keys(AS_CONFIG).forEach(cat => {
+                        if (document.getElementById(`as-${cat}-content`)) {
+                            renderAsCategory(cat);
+                        }
+                    });
+
+                    const message = `통합 데이터 가져오기 완료!\n기타제품: ${importStats.general}개\n컨버터: ${importStats.converter}개\n투광등: ${importStats.floodlight}개`;
+                    showConfirm(message, () => {});
+                    addRecentActivity('ASImport', `통합 A/S 데이터 가져옴`, `총 ${jsonData.length}개 항목`);
+                } catch (error) {
+                    console.error("통합 파일 처리 오류:", error);
+                    showConfirm("파일 처리 중 오류가 발생했습니다. 파일 형식을 확인해주세요.", () => {});
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function asSetIntegratedFilter(filter) {
+            asState.integratedFilter = filter;
+            renderAsIntegratedSubContent();
+        }
+        function asSetIntegratedStatusFilter(filter) {
+            asState.integratedStatusFilter = filter;
+            renderAsIntegratedSubContent();
+        }
+
+        function renderAsIntegratedTable() {
+            const tableContainer = document.getElementById(`as-table-integrated`);
+            if (!tableContainer) return;
+
+            const searchQuery = document.getElementById(`as-search-integrated`)?.value.toLowerCase() || '';
+
+            let allData = [];
+            Object.keys(AS_CONFIG).forEach(cat => {
+                if (asState.integratedFilter === 'all' || asState.integratedFilter === cat) {
+                    appData.as[cat].forEach(item => allData.push({ ...item, category: cat }));
+                }
+            });
+
+            if (asState.integratedStatusFilter !== 'all') {
+                allData = allData.filter(item => (
+                    asState.integratedStatusFilter === 'completed'
+                        ? item.status === 'completed'
+                        : item.status !== 'completed'
+                ));
+            }
+
+            if (searchQuery) {
+                allData = allData.filter(item =>
+                    Object.values(item).some(value => String(value).toLowerCase().includes(searchQuery))
+                );
+            }
+
+            const totalQuantity = allData.reduce((sum, item) => sum + (parseInt(item['수량']) || 0), 0);
+            const quantityDisplay = document.getElementById('as-search-total-quantity-integrated');
+            if (quantityDisplay) {
+                quantityDisplay.textContent = searchQuery ? `검색된 총 수량: ${totalQuantity.toLocaleString()}` : '';
+            }
+
+            allData.sort((a, b) => (parseInt(a['NO.']) || 0) - (parseInt(b['NO.']) || 0));
+
+            const selectedIds = asState.selectedIds.integrated;
+            const allVisibleChecked = allData.length > 0 && allData.every(item => selectedIds.has(item.id));
+
+            const headers = ['<input type="checkbox" onchange="asToggleSelectAll(event, \'integrated\')" ' + (allVisibleChecked ? 'checked' : '') + '>', 'NO.', '시스템', '상태', '구분', '클레임 NO.', '호선번호', '불량 자재코드', '대체 자재 코드', '컨버터 번호', '컨버터 코드', '설치 위치', '제품명', '수량', '접수일', '완료일', '비고'];
+            let headerHtml = `<thead><tr>${headers.map(h => `<th class="p-2 text-left">${h}</th>`).join('')}</tr></thead>`;
+
+            let bodyHtml = `<tbody>${allData.map(item => {
+                const isSelected = selectedIds.has(item.id);
+                const categoryName = AS_CONFIG[item.category].name;
+                const statusText = item.status === 'completed' ? '완료' : '미완료';
+                const statusColor = item.status === 'completed' ? 'text-green-400' : 'text-red-400';
+
+                let completionCell = item['완료일'] || '';
+                if (item.status !== 'completed') {
+                    completionCell = `<button class="btn-green py-1 px-2 rounded text-xs" onclick="asOpenCompleteModal('${item.category}', '${item.id}')">완료 처리</button>`;
+                }
+
+                const hullNumber = item['호선번호'] || '';
+                let hullNumberCell;
+                if (hullNumber) {
+                    const escapedHullNumber = psmEscapeHtml(hullNumber);
+                    hullNumberCell = `<a href="#" onclick="event.preventDefault(); showHullStatusModal('${escapedHullNumber}')" class="text-blue-300 hover:underline">${escapedHullNumber}</a>`;
+                } else {
+                    hullNumberCell = '';
+                }
+
+                return `<tr class="hover:bg-gray-700 ${isSelected ? 'bg-blue-900/50' : ''}">
+                    <td class="p-2"><input type="checkbox" onchange="asToggleSelectOne(event, 'integrated', '${item.id}')" ${isSelected ? 'checked' : ''}></td>
+                    <td class="p-2">${psmEscapeHtml(item['NO.'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(categoryName)}</td>
+                    <td class="p-2"><span class="${statusColor}">${psmEscapeHtml(statusText)}</span></td>
+                    <td class="p-2">${psmEscapeHtml(item['구분'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['클레임NO'] || '')}</td>
+                    <td class="p-2">${hullNumberCell}</td>
+                    <td class="p-2">${psmEscapeHtml(item['불량자재코드'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['대체자재코드'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['컨버터번호'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['컨버터코드'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['설치위치'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['제품명'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['수량'] || '')}</td>
+                    <td class="p-2">${psmEscapeHtml(item['접수일'] || '')}</td>
+                    <td class="p-2">${completionCell}</td>
+                    <td class="p-2">${psmEscapeHtml(item['비고'] || '')}</td>
+                </tr>`;
+            }).join('')}</tbody>`;
+
+            tableContainer.innerHTML = headerHtml + bodyHtml;
+        }
+
+        function renderAsIntegratedAnalysisChart() {
+            const chartEl = document.getElementById('as-chart-integrated');
+            if(!chartEl) return;
+
+            const categoryStats = Object.keys(AS_CONFIG).map(cat => {
+                const items = appData.as[cat];
+                const catCompleted = items.filter(i => i.status === 'completed').length;
+                const catIncomplete = items.length - catCompleted;
+                return { name: AS_CONFIG[cat].name, completed: catCompleted, incomplete: catIncomplete };
+            });
+
+            if (asCharts.integrated) asCharts.integrated.destroy();
+            asCharts.integrated = new Chart(chartEl, {
+                type: 'bar',
+                data: {
+                    labels: categoryStats.map(s => s.name),
+                    datasets: [
+                        { label: '완료', data: categoryStats.map(s => s.completed), backgroundColor: 'rgba(16, 185, 129, 0.7)' },
+                        { label: '미완료', data: categoryStats.map(s => s.incomplete), backgroundColor: 'rgba(239, 68, 68, 0.7)' }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { x: { stacked: true, ticks: { color: '#e5e7eb' } }, y: { stacked: true, ticks: { color: '#e5e7eb' } } },
+                    plugins: {
+                        title: { display: true, text: '제품군별 완료/미완료 건수', color: 'white', font: { size: 16 } },
+                        legend: { position: 'bottom', labels: { color: '#e5e7eb' } },
+                        datalabels: { color: 'white', formatter: (value) => value > 0 ? value : '' }
+                    }
+                }
+            });
+        }
+
+        function renderAsIncompleteList() {
+            const container = document.getElementById('as-incomplete-list-integrated');
+            if (!container) return;
+
+            const incompleteItems = [];
+            Object.keys(AS_CONFIG).forEach(category => {
+                const items = appData.as[category].filter(item => item.status === 'incomplete');
+                items.forEach(item => incompleteItems.push({ category, categoryName: AS_CONFIG[category].name, ...item }));
+            });
+
+            const groupedItems = {
+                general: incompleteItems.filter(item => item.category === 'general'),
+                converter: incompleteItems.filter(item => item.category === 'converter'),
+                floodlight: incompleteItems.filter(item => item.category === 'floodlight')
+            };
+
+            const generalStats = groupByCodeAndSort(groupedItems.general, '대체자재코드');
+            const floodlightStats = groupByCodeAndSort(groupedItems.floodlight, '대체자재코드');
+            const converterStats = groupByCodeAndSort(groupedItems.converter, '컨버터코드');
+
+            let html = '<div class="max-w-7xl mx-auto space-y-6">';
+
+            const totalIncomplete = incompleteItems.length;
+            const totalGeneral = generalStats.reduce((sum, stat) => sum + stat.quantity, 0);
+            const totalConverter = converterStats.reduce((sum, stat) => sum + stat.quantity, 0);
+            const totalFloodlight = floodlightStats.reduce((sum, stat) => sum + stat.quantity, 0);
+
+            html += `<div class="glass-card p-6">
+                <h3 class="text-xl font-semibold text-white mb-4 flex items-center">
+                    <i class="fas fa-exclamation-triangle mr-3 text-yellow-400"></i>미완료 제품 현황 요약
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-yellow-300">${totalIncomplete}</div>
+                        <div class="text-gray-300 text-sm">전체 미완료 건수</div>
+                    </div>
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-blue-300">${totalGeneral}</div>
+                        <div class="text-gray-300 text-sm">기타제품 수량</div>
+                    </div>
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-green-300">${totalConverter}</div>
+                        <div class="text-gray-300 text-sm">컨버터 수량</div>
+                    </div>
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-orange-300">${totalFloodlight}</div>
+                        <div class="text-gray-300 text-sm">투광등 수량</div>
+                    </div>
+                </div>
+            </div>`;
+
+            html += '<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">';
+
+            html += `<div class="glass-card p-6">
+                <h4 class="text-lg font-semibold text-blue-300 mb-4 flex items-center">
+                    <i class="fas fa-cog mr-2"></i>기타제품 (대체자재코드별)
+                </h4>`;
+            if (generalStats.length > 0) {
+                html += `<div class="space-y-2 max-h-96 overflow-y-auto">`;
+                generalStats.forEach(stat => {
+                    html += `<div class="flex justify-between items-center p-3 bg-gray-700 bg-opacity-30 rounded text-sm border-l-4 border-blue-400">
+                        <span class="text-gray-200 font-medium cursor-pointer hover:text-blue-300 transition-colors" onclick="showCodeDetailsModal('general', '${stat.code || 'N/A'}', '대체자재코드')">${stat.code || 'N/A'}</span>
+                        <span class="text-yellow-300 font-bold">${stat.quantity}개</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            } else {
+                html += '<div class="text-center text-gray-400 py-8">미완료 기타제품이 없습니다.</div>';
+            }
+            html += '</div>';
+
+            html += `<div class="glass-card p-6">
+                <h4 class="text-lg font-semibold text-green-300 mb-4 flex items-center">
+                    <i class="fas fa-microchip mr-2"></i>컨버터 (컨버터코드별)
+                </h4>`;
+            if (converterStats.length > 0) {
+                html += `<div class="space-y-2 max-h-96 overflow-y-auto">`;
+                converterStats.forEach(stat => {
+                    html += `<div class="flex justify-between items-center p-3 bg-gray-700 bg-opacity-30 rounded text-sm border-l-4 border-green-400">
+                        <span class="text-gray-200 font-medium cursor-pointer hover:text-green-300 transition-colors" onclick="showCodeDetailsModal('converter', '${stat.code || 'N/A'}', '컨버터코드')">${stat.code || 'N/A'}</span>
+                        <span class="text-yellow-300 font-bold">${stat.quantity}개</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            } else {
+                html += '<div class="text-center text-gray-400 py-8">미완료 컨버터가 없습니다.</div>';
+            }
+            html += '</div>';
+
+            html += `<div class="glass-card p-6">
+                <h4 class="text-lg font-semibold text-orange-300 mb-4 flex items-center">
+                    <i class="fas fa-lightbulb mr-2"></i>투광등 (대체자재코드별)
+                </h4>`;
+            if (floodlightStats.length > 0) {
+                html += `<div class="space-y-2 max-h-96 overflow-y-auto">`;
+                floodlightStats.forEach(stat => {
+                    html += `<div class="flex justify-between items-center p-3 bg-gray-700 bg-opacity-30 rounded text-sm border-l-4 border-orange-400">
+                        <span class="text-gray-200 font-medium cursor-pointer hover:text-orange-300 transition-colors" onclick="showCodeDetailsModal('floodlight', '${stat.code || 'N/A'}', '대체자재코드')">${stat.code || 'N/A'}</span>
+                        <span class="text-yellow-300 font-bold">${stat.quantity}개</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            } else {
+                html += '<div class="text-center text-gray-400 py-8">미완료 투광등이 없습니다.</div>';
+            }
+            html += '</div>';
+
+            html += '</div></div>';
+
+            container.innerHTML = html;
+        }
+
+        function renderAsCategoryIncompleteList(category) {
+            const container = document.getElementById(`as-incomplete-list-${category}`);
+            if (!container) return;
+
+            const incompleteItems = appData.as[category].filter(item => item.status === 'incomplete');
+
+            let stats = [];
+            let codeField = '';
+            let title = '';
+            let icon = '';
+            let color = '';
+            let borderColor = '';
+
+            if (category === 'general') {
+                codeField = '대체자재코드';
+                title = '기타제품 미완료 리스트';
+                icon = 'fas fa-cog';
+                color = 'text-blue-300';
+                borderColor = 'border-blue-400';
+                stats = groupByCodeAndSort(incompleteItems, codeField);
+            } else if (category === 'converter') {
+                codeField = '컨버터코드';
+                title = '컨버터 미완료 리스트';
+                icon = 'fas fa-microchip';
+                color = 'text-green-300';
+                borderColor = 'border-green-400';
+                stats = groupByCodeAndSort(incompleteItems, codeField);
+            } else if (category === 'floodlight') {
+                codeField = '대체자재코드';
+                title = '투광등 미완료 리스트';
+                icon = 'fas fa-lightbulb';
+                color = 'text-orange-300';
+                borderColor = 'border-orange-400';
+                stats = groupByCodeAndSort(incompleteItems, codeField);
+            }
+
+            const totalQuantity = stats.reduce((sum, stat) => sum + stat.quantity, 0);
+            const totalItems = incompleteItems.length;
+
+            let html = '<div class="max-w-6xl mx-auto space-y-6">';
+
+            html += `<div class="glass-card p-6">
+                <h3 class="text-xl font-semibold ${color} mb-4 flex items-center">
+                    <i class="${icon} mr-3"></i>${title}
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-yellow-300">${totalItems}</div>
+                        <div class="text-gray-300 text-sm">미완료 건수</div>
+                    </div>
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold ${color}">${totalQuantity}</div>
+                        <div class="text-gray-300 text-sm">총 수량</div>
+                    </div>
+                    <div class="bg-gray-700 bg-opacity-50 p-4 rounded-lg text-center">
+                        <div class="text-2xl font-bold text-white">${stats.length}</div>
+                        <div class="text-gray-300 text-sm">코드 종류</div>
+                    </div>
+                </div>
+            </div>`;
+
+            if (stats.length > 0) {
+                html += `<div class="glass-card p-6">
+                    <h4 class="text-lg font-semibold text-white mb-4">코드별 상세 현황 (수량 많은 순)</h4>
+                    <div class="space-y-3 max-h-96 overflow-y-auto">`;
+
+                stats.forEach((stat, index) => {
+                    const rankBadge = index < 3 ? `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        index === 0 ? 'bg-yellow-500 text-black' :
+                        index === 1 ? 'bg-gray-400 text-black' : 'bg-orange-500 text-white'
+                    }">TOP ${index + 1}</span>` : '';
+
+                    html += `<div class="flex justify-between items-center p-4 bg-gray-700 bg-opacity-30 rounded-lg border-l-4 ${borderColor}">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-gray-200 font-medium text-lg cursor-pointer hover:${color} transition-colors" onclick="showCodeDetailsModal('${category}', '${stat.code || 'N/A'}', '${codeField}')">${stat.code || 'N/A'}</span>
+                            ${rankBadge}
+                        </div>
+                        <span class="text-yellow-300 font-bold text-lg">${stat.quantity}개</span>
+                    </div>`;
+                });
+
+                html += `</div></div>`;
+            } else {
+                html += `<div class="glass-card p-6">
+                    <div class="text-center text-gray-400 py-12">
+                        <i class="${icon} text-6xl mb-4"></i>
+                        <div class="text-xl">미완료 제품이 없습니다.</div>
+                        <div class="text-sm mt-2">모든 제품이 완료 처리되었습니다.</div>
+                    </div>
+                </div>`;
+            }
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        function showCodeDetailsModal(category, code, codeField) {
+            if (!code || code === 'N/A') return;
+
+            const items = appData.as[category].filter(item =>
+                item.status === 'incomplete' && item[codeField] === code
+            );
+
+            if (items.length === 0) return;
+
+            const categoryInfo = AS_CONFIG[category];
+            let modalHtml = `
+                <div class="modal-overlay" onclick="closeCodeDetailsModal(event)">
+                    <div class="glass-card p-6 max-w-4xl mx-4 max-h-96 overflow-hidden" onclick="event.stopPropagation()">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="text-xl font-semibold text-white flex items-center">
+                                <i class="fas ${category === 'general' ? 'fa-cog text-blue-300' :
+                                              category === 'converter' ? 'fa-microchip text-green-300' :
+                                              'fa-lightbulb text-orange-300'} mr-3"></i>
+                                ${categoryInfo.name} - ${code} 상세 정보
+                            </h3>
+                            <button onclick="closeCodeDetailsModal()" class="text-gray-400 hover:text-white">
+                                <i class="fas fa-times text-xl"></i>
+                            </button>
+                        </div>
+
+                        <div class="mb-4">
+                            <div class="flex items-center space-x-6 text-sm text-gray-300">
+                                <span><strong class="text-white">총 수량:</strong> ${items.reduce((sum, item) => sum + (parseInt(item['수량']) || 0), 0)}개</span>
+                                <span><strong class="text-white">건수:</strong> ${items.length}건</span>
+                            </div>
+                        </div>
+
+                        <div class="overflow-y-auto max-h-64">
+                            <table class="min-w-full text-sm text-white">
+                                <thead>
+                                    <tr class="bg-gray-700 bg-opacity-50">
+                                        <th class="p-3 text-left">호선번호</th>
+                                        <th class="p-3 text-left">클레임 NO.</th>
+                                        <th class="p-3 text-left">제품명</th>
+                                        <th class="p-3 text-left">수량</th>
+                                        <th class="p-3 text-left">접수일</th>
+                                        <th class="p-3 text-left">비고</th>
+                                    </tr>
+                                </thead>
+                                <tbody>`;
+
+            items.forEach(item => {
+                modalHtml += `
+                    <tr class="border-b border-gray-700 hover:bg-gray-700 hover:bg-opacity-30">
+                        <td class="p-3">${item['호선번호'] || '-'}</td>
+                        <td class="p-3">${item['클레임NO'] || '-'}</td>
+                        <td class="p-3">${item['제품명'] || '-'}</td>
+                        <td class="p-3 font-semibold text-yellow-300">${item['수량'] || 0}</td>
+                        <td class="p-3">${item['접수일'] || '-'}</td>
+                        <td class="p-3 max-w-xs truncate" title="${item['비고'] || ''}">${item['비고'] || '-'}</td>
+                    </tr>`;
+            });
+
+            modalHtml += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>`;
+
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    closeCodeDetailsModal();
+                    document.removeEventListener('keydown', handleEscape);
+                }
+            };
+            document.addEventListener('keydown', handleEscape);
+        }
+
+        function closeCodeDetailsModal(event) {
+            if (event && event.target !== event.currentTarget) return;
+            const modal = document.querySelector('.modal-overlay:not(#generic-modal):not(#confirm-modal)');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        function groupByCodeAndSort(items, codeField) {
+            const codeMap = {};
+            items.forEach(item => {
+                const code = item[codeField] || 'N/A';
+                const quantity = parseInt(item['수량']) || 0;
+                if (!codeMap[code]) codeMap[code] = 0;
+                codeMap[code] += quantity;
+            });
+            return Object.entries(codeMap)
+                .map(([code, quantity]) => ({ code, quantity }))
+                .sort((a, b) => b.quantity - a.quantity);
+        }
+
+        function asSearchCategory(category) { renderAsCategoryTable(category); }
+        function asClearSearch(category) { document.getElementById(`as-search-${category}`).value = ''; renderAsCategoryTable(category); }
+        function asSearchIntegrated() { renderAsIntegratedTable(); }
+        function asClearSearchIntegrated() { document.getElementById(`as-search-integrated`).value = ''; renderAsIntegratedTable(); }
+
+        function asToggleSelectAll(event, context) {
+            const isChecked = event.target.checked;
+            const selectedIds = asState.selectedIds[context];
+            const searchQuery = document.getElementById(`as-search-${context}`)?.value.toLowerCase() || '';
+
+            selectedIds.clear();
+
+            if (isChecked) {
+                let data;
+                if (context === 'integrated') {
+                    const filter = asState.integratedFilter;
+                    const statusFilter = asState.integratedStatusFilter;
+                    let allData = [];
+                    Object.keys(AS_CONFIG).forEach(cat => {
+                        if (filter === 'all' || filter === cat) {
+                            allData.push(...appData.as[cat]);
+                        }
+                    });
+
+                    if(statusFilter !== 'all') {
+                        allData = allData.filter(item => statusFilter === 'completed' ? item.status === 'completed' : item.status !== 'completed');
+                    }
+
+                    if (searchQuery) {
+                        allData = allData.filter(item => Object.values(item).some(value => String(value).toLowerCase().includes(searchQuery)));
+                    }
+                    data = allData;
+
+                } else {
+                    const subTab = asState.activeSubTab[context];
+                    data = appData.as[context].filter(item => {
+                        const statusMatch = (subTab === 'completed' && item.status === 'completed') || (subTab === 'incomplete' && item.status !== 'completed');
+                        if (!statusMatch) return false;
+                        if (searchQuery) {
+                            return Object.values(item).some(value => String(value).toLowerCase().includes(searchQuery));
+                        }
+                        return true;
+                    });
+                }
+                data.forEach(item => selectedIds.add(item.id));
+            }
+
+            if (context === 'integrated') renderAsIntegratedTable();
+            else renderAsCategorySubContent(context);
+        }
+
+        function asToggleSelectOne(event, context, id) {
+            const isChecked = event.target.checked;
+            const selectedIds = asState.selectedIds[context];
+            if (isChecked) selectedIds.add(id);
+            else selectedIds.delete(id);
+            if (context === 'integrated') renderAsIntegratedTable();
+            else renderAsCategorySubContent(context);
+        }
+
+        function asHandleFileSelect(event, category) {
+            const file = event.target.files[0];
+            if (file) {
+                asImportFromExcel(category, file);
+                event.target.value = '';
+            }
+        }
+
+        async function asImportFromExcel(category, file) {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[sheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+                    if (!jsonData || jsonData.length === 0) {
+                        showConfirm("파일에 데이터가 없습니다.", () => {});
+                        return;
+                    }
+
+                    const config = AS_CONFIG[category];
+                    const newItems = jsonData.map(row => {
+                        const newItem = { id: Date.now() + Math.random() * 1000 };
+                        for (const header in config.fields) {
+                            const key = config.fields[header];
+                            let value = row[header];
+                            if (key === '접수일' || key === '완료일') {
+                                value = formatDate(value);
+                            } else if (key === '수량') {
+                                value = parseInt(value) || 0;
+                            }
+                            newItem[key] = value;
+                        }
+                        newItem.status = newItem['완료일'] ? 'completed' : 'incomplete';
+                        return newItem;
+                    });
+
+                    appData.as[category].push(...newItems);
+                    asReindex(category);
+                    
+                    if (isOnline) {
+                        await saveBulkDataToFirebase(category, appData.as[category]);
+                    }
+
+                    renderAsCategory(category);
+                    renderAsDashboard();
+                    addRecentActivity('ASImport', `A/S(${config.name}) 데이터 가져옴`, `${newItems.length}개 항목`);
+                } catch (error) {
+                    console.error("A/S File processing error:", error);
+                    showConfirm("파일 처리 중 오류가 발생했습니다. 파일 형식을 확인해주세요.", () => {});
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function asExport(category, filtered) {
+            const config = AS_CONFIG[category];
+            const activeSubTab = asState.activeSubTab[category];
+            let dataToExport;
+
+            if (filtered) {
+                const searchQuery = document.getElementById(`as-search-${category}`)?.value.toLowerCase() || '';
+                dataToExport = appData.as[category].filter(item => {
+                    const statusMatch = (activeSubTab === 'incomplete' && item.status !== 'completed') || (activeSubTab === 'completed' && item.status === 'completed');
+                    if (!statusMatch) return false;
+                    return Object.values(item).some(value => String(value).toLowerCase().includes(searchQuery));
+                });
+            } else {
+                dataToExport = appData.as[category].filter(item => (activeSubTab === 'incomplete' && item.status !== 'completed') || (activeSubTab === 'completed' && item.status === 'completed'));
+            }
+
+            if (dataToExport.length === 0) {
+                showConfirm("내보낼 데이터가 없습니다.", () => {});
+                return;
+            }
+
+            const headers = Object.keys(config.fields);
+            const exportData = dataToExport.map(item => {
+                const row = {};
+                headers.forEach(h => row[h] = item[config.fields[h]]);
+                return row;
+            });
+
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, `${config.name}_${activeSubTab}`);
+            XLSX.writeFile(wb, `AS_${config.name}_${activeSubTab}_${getTodayString()}.xlsx`);
+            addRecentActivity('ASExport', `A/S(${config.name}) 데이터 내보냄`, `${dataToExport.length}개 항목`);
+        }
+
+        function asExportAllForCategory(category) {
+            const config = AS_CONFIG[category];
+            const dataToExport = appData.as[category];
+
+            if (dataToExport.length === 0) {
+                showConfirm("내보낼 데이터가 없습니다.", () => {});
+                return;
+            }
+
+            const headers = Object.keys(config.fields);
+            const exportData = dataToExport.map(item => {
+                const row = {};
+                row['상태'] = item.status === 'completed' ? '완료' : '미완료';
+                headers.forEach(h => row[h] = item[config.fields[h]]);
+                return row;
+            });
+
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, `${config.name}_전체`);
+            XLSX.writeFile(wb, `AS_${config.name}_전체_${getTodayString()}.xlsx`);
+            addRecentActivity('ASExport', `A/S(${config.name}) 전체 데이터 내보냄`, `${dataToExport.length}개 항목`);
+        }
+
+        function asExportIntegrated(filtered) {
+            let baseData = [];
+            Object.keys(AS_CONFIG).forEach(cat => {
+                if (asState.integratedFilter === 'all' || asState.integratedFilter === cat) {
+                    baseData.push(...appData.as[cat].map(item => ({ ...item, category: cat })));
+                }
+            });
+
+            if (asState.integratedStatusFilter !== 'all') {
+                baseData = baseData.filter(item =>
+                    asState.integratedStatusFilter === 'completed'
+                        ? item.status === 'completed'
+                        : item.status !== 'completed'
+                );
+            }
+
+            let dataToExport = baseData;
+            if (filtered) {
+                const searchQuery = document.getElementById('as-search-integrated')?.value.toLowerCase() || '';
+                if (searchQuery) {
+                    dataToExport = baseData.filter(item =>
+                        Object.values(item).some(value => String(value).toLowerCase().includes(searchQuery))
+                    );
+                }
+            }
+
+            if (dataToExport.length === 0) {
+                showConfirm("내보낼 데이터가 없습니다.", () => {});
+                return;
+            }
+
+            const exportData = dataToExport.map(item => ({
+                '시스템': AS_CONFIG[item.category].name,
+                '상태': item.status === 'completed' ? '완료' : '미완료',
+                'NO.': item['NO.'],
+                '구분': item['구분'],
+                '클레임 NO.': item['클레임NO'],
+                '호선번호': item['호선번호'],
+                '불량 자재코드': item['불량자재코드'],
+                '대체 자재 코드': item['대체자재코드'],
+                '컨버터 번호': item['컨버터번호'],
+                '컨버터 코드': item['컨버터코드'],
+                '설치 위치': item['설치위치'],
+                '제품명': item['제품명'],
+                '수량': item['수량'],
+                '접수일': item['접수일'],
+                '완료일': item['완료일'],
+                '비고': item['비고']
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'AS_통합');
+            XLSX.writeFile(wb, `AS_통합_${getTodayString()}.xlsx`);
+            addRecentActivity('ASExport', `A/S 통합 데이터 내보냄`, `${dataToExport.length}개 항목`);
+        }
+
+        function asOpenAddModal(category, id = null) {
+            const cfg = AS_CONFIG[category];
+            currentModalType = `as-${category}`;
+            currentEditId = id;
+            const isEdit = !!id;
+            const item = isEdit ? appData.as[category].find(i => i.id === id) : {};
+
+            const autocompleteFields = {
+                general: ['불량자재코드', '대체자재코드'],
+                converter: ['컨버터번호', '컨버터코드'],
+                floodlight: ['불량자재코드', '대체자재코드']
+            };
+            const fieldsForCategory = autocompleteFields[category] || [];
+
+            let fieldsHtml = '';
+            Object.entries(cfg.fields).forEach(([label, key]) => {
+                if (key === '완료일' || key === 'NO.') return;
+
+                const val = item[key] || '';
+                const ipType = key === '수량' ? 'number' : (key === '접수일' ? 'date' : 'text');
+
+                if (fieldsForCategory.includes(key)) {
+                    const datalistId = `datalist-${key.replace(/\s/g, '-')}`;
+                    const uniqueValues = [...new Set(appData.as[category].map(i => i[key]).filter(Boolean))];
+                    const datalistHtml = `<datalist id="${datalistId}">${uniqueValues.map(v => `<option value="${v}"></option>`).join('')}</datalist>`;
+
+                    fieldsHtml += `
+                    <div class="mb-3">
+                        <label class="block mb-1 text-sm">${label}</label>
+                        <input id="modal-${key}" type="text" value="${val}" list="${datalistId}" class="modal-input w-full p-2 rounded" autocomplete="off">
+                        ${datalistHtml}
+                    </div>`;
+                } else {
+                    fieldsHtml += `
+                    <div class="mb-3">
+                        <label class="block mb-1 text-sm">${label}</label>
+                        <input id="modal-${key}" type="${ipType}" value="${val}" class="modal-input w-full p-2 rounded">
+                    </div>`;
+                }
+            });
+
+            const noValue = isEdit ? (item['NO.'] || '') : asGetNextNo(category);
+            document.getElementById('generic-modal').innerHTML = `
+            <div class="glass-card p-6 w-full max-w-xl mx-4 text-white">
+                <h2 class="text-xl font-bold mb-4">${cfg.name} A/S ${isEdit ? '편집' : '추가'}</h2>
+                <p class="mb-3 text-sm"><b>NO.</b> : ${noValue}</p>
+                <div class="grid md:grid-cols-2 gap-4">${fieldsHtml}</div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button onclick="closeModal()" class="bg-gray-600 hover:bg-gray-500 px-4 py-2 rounded">취소</button>
+                    <button onclick="asSaveItem()" class="btn-primary px-4 py-2 rounded">저장</button>
+                </div>
+            </div>`;
+            document.getElementById('generic-modal').style.display = 'flex';
+        }
+
+        async function asSaveItem() {
+            const category = currentModalType.split('-')[1];
+            const cfg = AS_CONFIG[category];
+            const isEdit = !!currentEditId;
+            const id = isEdit ? currentEditId : Date.now();
+            let item = isEdit ? {...appData.as[category].find(i => i.id === id)} : {id, status: 'incomplete'};
+
+            if(!isEdit) item['NO.'] = asGetNextNo(category);
+
+            Object.values(cfg.fields).forEach(key => {
+                if(['NO.', '완료일'].includes(key)) return;
+                const ip = document.getElementById(`modal-${key}`);
+                if(ip) item[key] = key === '수량' ? parseInt(ip.value || 0) : ip.value;
+            });
+
+            if(isEdit){
+                const idx = appData.as[category].findIndex(i => i.id === id);
+                appData.as[category][idx] = item;
+            } else {
+                appData.as[category].push(item);
+            }
+
+            try {
+                if (isOnline) {
+                    await saveItemToFirebase(category, item);
+                }
+                asReindex(category);
+                if (isOnline) {
+                    await saveBulkDataToFirebase(category, appData.as[category]);
+                }
+            } catch (error) {
+                console.error('저장 오류:', error);
+                showConfirm('온라인 저장에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
+            }
+
+            closeModal();
+            renderAsCategory(category);
+            renderAsDashboard();
+            renderAsIntegrated();
+
+            if (asState.activeSubTab[category] === 'incomplete-list') {
+                renderAsCategoryIncompleteList(category);
+            }
+            if (asState.activeSubTab.integrated === 'incomplete-list') {
+                renderAsIncompleteList();
+            }
+        }
+
+        function asOpenCompleteModal(category, id) {
+            const item = appData.as[category].find(i => i.id == id);
+            if (!item) return;
+
+            currentModalType = `as-complete-${category}`;
+            currentEditId = id;
+
+            const modal = document.getElementById('generic-modal');
+            modal.innerHTML = `
+                <div class="glass-card p-6 w-full max-w-md mx-4 text-white">
+                    <h2 class="text-xl font-bold mb-6">A/S 완료 처리</h2>
+                    <p class="mb-4"><strong>클레임 NO:</strong> ${item['클레임NO'] || 'N/A'}</p>
+                    <div class="mb-4">
+                        <label class="block mb-1 text-sm">완료일</label>
+                        <input type="date" id="modal-complete-date" value="${getTodayString()}" class="p-2 rounded w-full modal-input">
+                    </div>
+                    <div class="mb-4">
+                        <label class="block mb-1 text-sm">비고 (추가)</label>
+                        <textarea id="modal-complete-notes" rows="3" class="p-2 rounded w-full modal-input"></textarea>
+                    </div>
+                    <div class="flex justify-end space-x-3 mt-6">
+                        <button onclick="closeModal()" class="py-2 px-4 rounded-md bg-gray-600 hover:bg-gray-500">취소</button>
+                        <button onclick="asCompleteItem()" class="py-2 px-4 rounded-md btn-primary">완료 저장</button>
+                    </div>
+                </div>`;
+            modal.style.display = 'flex';
+        }
+
+        async function asCompleteItem() {
+            if (!currentModalType.startsWith('as-complete-')) return;
+            const category = currentModalType.split('-')[2];
+            const config = AS_CONFIG[category];
+
+            const item = appData.as[category].find(i => i.id == currentEditId);
+            if (!item) return;
+
+            item.status = 'completed';
+            item['완료일'] = document.getElementById('modal-complete-date').value;
+            const newNotes = document.getElementById('modal-complete-notes').value;
+            if (newNotes) {
+                item['비고'] = item['비고'] ? `${item['비고']}\n[${item['완료일']}] ${newNotes}` : `[${item['완료일']}] ${newNotes}`;
+            }
+
+            try {
+                if (isOnline) {
+                    await saveItemToFirebase(category, item);
+                }
+            } catch (error) {
+                console.error('완료 처리 저장 오류:', error);
+                showConfirm('온라인 저장에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
+            }
+
+            closeModal();
+
+            if (asState.activeTab === 'integrated') {
+                renderAsIntegratedTable();
+                if (asState.activeSubTab.integrated === 'incomplete-list') {
+                    renderAsIncompleteList();
+                }
+            } else {
+                renderAsCategoryTable(category);
+                if (asState.activeSubTab[category] === 'incomplete-list') {
+                    renderAsCategoryIncompleteList(category);
+                }
+            }
+            renderAsDashboard();
+            addRecentActivity('ASComplete', `A/S(${config.name}) 완료 처리됨`, item['클레임NO'] || item['제품명']);
+        }
+
+        function asDeleteSelected(context) {
+            const selectedIds = asState.selectedIds[context];
+            if (selectedIds.size === 0) return;
+
+            showConfirm(`${selectedIds.size}개의 A/S 항목을 정말 삭제하시겠습니까?`, async () => {
+                let deletedCount = 0;
+                let categoriesToReindex = new Set();
+
+                showLoading();
+                try {
+                    if (context === 'integrated') {
+                        for (const id of selectedIds) {
+                            for (const category of Object.keys(AS_CONFIG)) {
+                                const index = appData.as[category].findIndex(item => item.id == id);
+                                if (index > -1) {
+                                    if (isOnline) {
+                                        await deleteItemFromFirebase(category, id);
+                                    }
+                                    appData.as[category].splice(index, 1);
+                                    categoriesToReindex.add(category);
+                                    deletedCount++;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        for (const id of selectedIds) {
+                            if (isOnline) {
+                                await deleteItemFromFirebase(context, id);
+                            }
+                        }
+                        appData.as[context] = appData.as[context].filter(item => !selectedIds.has(item.id));
+                        categoriesToReindex.add(context);
+                        deletedCount = selectedIds.size;
+                    }
+
+                    for (const cat of categoriesToReindex) {
+                        asReindex(cat);
+                        if (isOnline) {
+                            await saveBulkDataToFirebase(cat, appData.as[cat]);
+                        }
+                    }
+                } catch (error) {
+                    console.error('삭제 오류:', error);
+                    showConfirm('온라인 삭제에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
+                } finally {
+                    hideLoading();
+                }
+
+                selectedIds.clear();
+
+                if (context === 'integrated') {
+                    renderAsIntegrated();
+                    if (asState.activeSubTab.integrated === 'incomplete-list') {
+                        renderAsIncompleteList();
+                    }
+                } else {
+                    renderAsCategory(context);
+                    if (asState.activeSubTab[context] === 'incomplete-list') {
+                        renderAsCategoryIncompleteList(context);
+                    }
+                }
+
+                renderAsDashboard();
+                addRecentActivity('AS', `A/S 항목 삭제됨`, `${deletedCount}개`);
+            });
+        }
+
+        function asClearCategoryData(category) {
+            const config = AS_CONFIG[category];
+            showConfirm(`${config.name}의 모든 데이터를 정말 삭제하시겠습니까?`, async () => {
+                showLoading();
+                try {
+                    if (isOnline) {
+                        await clearCategoryInFirebase(category);
+                    }
+                    appData.as[category] = [];
+                } catch (error) {
+                    console.error('데이터 초기화 오류:', error);
+                    showConfirm('온라인 데이터 초기화에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
+                } finally {
+                    hideLoading();
+                }
+
+                renderAsCategory(category);
+                renderAsDashboard();
+
+                if (asState.activeSubTab[category] === 'incomplete-list') {
+                    renderAsCategoryIncompleteList(category);
+                }
+                if (asState.activeSubTab.integrated === 'incomplete-list') {
+                    renderAsIncompleteList();
+                }
+                addRecentActivity('AS', `${config.name} 데이터 초기화됨`, '');
+            });
+        }
+
+        function showHullStatusModal(hullNumber) {
+            const allIncompleteItems = [];
+            Object.keys(AS_CONFIG).forEach(category => {
+                const items = appData.as[category].filter(item => {
+                    return String(item['호선번호'] || '').trim() === String(hullNumber || '').trim()
+                           && item.status !== 'completed';
+                });
+                items.forEach(item => {
+                    allIncompleteItems.push({
+                        ...item,
+                        categoryName: AS_CONFIG[category].name
+                    });
+                });
+            });
+
+            allIncompleteItems.sort((a, b) => new Date(a['접수일']) - new Date(b['접수일']));
+
+            let tableRowsHtml = '';
+            if (allIncompleteItems.length > 0) {
+                tableRowsHtml = allIncompleteItems.map(item => {
+                    const materialCode = item['불량자재코드'] || item['컨버터코드'] || 'N/A';
+                    return `
+                        <tr class="hover:bg-gray-700">
+                            <td class="p-2">${psmEscapeHtml(item.categoryName)}</td>
+                            <td class="p-2">${psmEscapeHtml(item['접수일'])}</td>
+                            <td class="p-2">${psmEscapeHtml(item['클레임NO'] || '')}</td>
+                            <td class="p-2">${psmEscapeHtml(item['제품명'])}</td>
+                            <td class="p-2">${psmEscapeHtml(materialCode)}</td>
+                            <td class="p-2">${psmEscapeHtml(item['수량'])}</td>
+                            <td class="p-2">${psmEscapeHtml(item['비고'])}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                tableRowsHtml = `<tr><td colspan="7" class="p-6 text-center text-gray-400">해당 호선에 대한 미완료 A/S 항목이 없습니다.</td></tr>`;
+            }
+
+            const modalHtml = `
+                <div class="glass-card p-6 w-full max-w-5xl mx-4 text-white rounded-lg shadow-xl">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-bold">호선별 미완료 현황: ${psmEscapeHtml(hullNumber)}</h2>
+                        <button onclick="closeModal()" class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+                    </div>
+                    <div class="overflow-y-auto max-h-[60vh]">
+                        <table class="min-w-full text-sm text-white">
+                            <thead>
+                                <tr class="text-left">
+                                    <th class="p-2">시스템</th>
+                                    <th class="p-2">접수일</th>
+                                    <th class="p-2">클레임 NO.</th>
+                                    <th class="p-2">제품명</th>
+                                    <th class="p-2">자재코드</th>
+                                    <th class="p-2">수량</th>
+                                    <th class="p-2">비고</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${tableRowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="flex justify-end mt-6">
+                        <button onclick="closeModal()" class="py-2 px-4 rounded-md bg-gray-600 hover:bg-gray-500">닫기</button>
+                    </div>
+                </div>
+            `;
+
+            const modalContainer = document.getElementById('generic-modal');
+            modalContainer.innerHTML = modalHtml;
+            modalContainer.style.display = 'flex';
+        }
+
+        function handleDragOver(event, category) {
+            event.preventDefault();
+            document.getElementById(`as-drop-zone-${category}`).classList.add('dragover');
+        }
+        function handleDragLeave(event, category) {
+            event.preventDefault();
+            document.getElementById(`as-drop-zone-${category}`).classList.remove('dragover');
+        }
+        function handleDrop(event, category) {
+            event.preventDefault();
+            document.getElementById(`as-drop-zone-${category}`).classList.remove('dragover');
+            const file = event.dataTransfer.files[0];
+            if (file) asImportFromExcel(category, file);
+        }
+
+        function closeModal() {
+            document.getElementById('generic-modal').style.display = 'none';
+        }
+
+        function showConfirm(text, callback) {
+            const modal = document.getElementById('confirm-modal');
+            modal.querySelector('#confirm-modal-text').textContent = text;
+            modal.style.display = 'flex';
+            confirmCallback = callback;
+        }
+        function hideConfirm() {
+            const confirmModal = document.getElementById('confirm-modal');
+            if(confirmModal) confirmModal.style.display = 'none';
+            confirmCallback = null;
+        }
+
+        function downloadHTML() {
+            const fullHtml = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+            const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'AS통합관리시스템_스냅샷.html';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            addRecentActivity('System', 'HTML 스냅샷 다운로드됨', '');
+        }
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            document.getElementById('confirm-ok-btn').addEventListener('click', () => {
+                if (confirmCallback) confirmCallback();
+                hideConfirm();
+            });
+            document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+
+            // Firebase 초기화 및 데이터 로드
+            showLoading();
+            const firebaseInitialized = await initFirebase();
+            if (firebaseInitialized) {
+                await loadAllDataFromFirebase();
+            } else {
+                showConfirm("Firebase 연결에 실패했습니다. 오프라인 모드로 실행됩니다.", () => {});
+            }
+            hideLoading();
+
+            // Register Chart.js plugins
+            Chart.register(ChartDataLabels);
+
+            // Show dashboard by default
+            showAsSubTab('dashboard');
+
+            // 온라인/오프라인 상태 모니터링
+            window.addEventListener('online', () => {
+                updateConnectionStatus(true);
+                // 온라인 복구 시 데이터 동기화
+                loadAllDataFromFirebase();
+            });
+
+            window.addEventListener('offline', () => {
+                updateConnectionStatus(false);
+            });
+
+            // 초기 연결 상태 확인
+            updateConnectionStatus(navigator.onLine && isOnline);
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (event) => {
+                if (event.ctrlKey || event.metaKey) {
+                    if(asState.activeCategory) {
+                        if (event.key === 'o') {
+                            event.preventDefault();
+                            document.getElementById(`as-file-input-${asState.activeCategory}`)?.click();
+                        }
+                        if (event.key === 'e') {
+                            event.preventDefault();
+                            asExport(asState.activeCategory, false);
+                        }
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
