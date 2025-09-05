@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Read(/C:\\Windows\\system32\\as-management-system\\public/**)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

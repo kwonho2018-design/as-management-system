@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A/S 통합 관리 시스템</title>
+    <title>새로운 관리 시스템</title>
     <!-- Tailwind CSS 3.4.1 CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome 6 CDN -->
@@ -366,6 +366,52 @@
             }
         }
 
+        // --- Local Storage Operations ---
+        function saveToLocalStorage() {
+            try {
+                const dataToSave = {
+                    as: appData.as,
+                    recentActivities: appData.recentActivities,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem('as_management_data', JSON.stringify(dataToSave));
+                console.log('데이터가 로컬 스토리지에 저장되었습니다.');
+            } catch (error) {
+                console.error('로컬 스토리지 저장 오류:', error);
+            }
+        }
+
+        function loadFromLocalStorage() {
+            try {
+                const savedData = localStorage.getItem('as_management_data');
+                if (savedData) {
+                    const parsedData = JSON.parse(savedData);
+                    appData.as = parsedData.as || { general: [], converter: [], floodlight: [] };
+                    appData.recentActivities = parsedData.recentActivities || [];
+                    console.log('로컬 스토리지에서 데이터를 복원했습니다.');
+                    
+                    // 각 카테고리별 인덱스 재구성
+                    Object.keys(AS_CONFIG).forEach(category => {
+                        asReindex(category);
+                    });
+                    
+                    return true;
+                }
+            } catch (error) {
+                console.error('로컬 스토리지 로드 오류:', error);
+            }
+            return false;
+        }
+
+        function clearLocalStorage() {
+            try {
+                localStorage.removeItem('as_management_data');
+                console.log('로컬 스토리지가 초기화되었습니다.');
+            } catch (error) {
+                console.error('로컬 스토리지 초기화 오류:', error);
+            }
+        }
+
         // --- Firebase Operations ---
         async function initFirebase() {
             try {
@@ -413,6 +459,7 @@
                 // 각 카테고리별 데이터 로드
                 for (const category of Object.keys(AS_CONFIG)) {
                     try {
+                        console.log(`${AS_CONFIG[category].name} 데이터 로드 시작... 스토어: ${AS_CONFIG[category].store}`);
                         const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
                         appData.as[category] = [];
                         querySnapshot.forEach((doc) => {
@@ -423,10 +470,17 @@
                         });
                         asReindex(category);
                         console.log(`${AS_CONFIG[category].name} 데이터 로드 완료: ${appData.as[category].length}개`);
+                        if (appData.as[category].length === 0) {
+                            console.warn(`경고: ${AS_CONFIG[category].name} 컬렉션(${AS_CONFIG[category].store})에 데이터가 없습니다.`);
+                        }
                     } catch (error) {
                         console.error(`${AS_CONFIG[category].name} 데이터 로드 오류:`, error);
+                        console.error(`스토어 경로: ${AS_CONFIG[category].store}`);
                     }
                 }
+
+                // Firebase 데이터 로드 후 로컬 스토리지에 백업
+                saveToLocalStorage();
 
                 // 최근 활동 로드
                 try {
@@ -1103,6 +1157,9 @@
                             }
                         }
                     }
+                    
+                    // 로컬 스토리지에 백업
+                    saveToLocalStorage();
                     hideLoading();
 
                     renderAsDashboard();
@@ -1662,6 +1719,9 @@
                     if (isOnline && firebaseReady) {
                         await saveBulkDataToFirebase(category, appData.as[category]);
                     }
+                    
+                    // 로컬 스토리지에 백업
+                    saveToLocalStorage();
 
                     renderAsCategory(category);
                     renderAsDashboard();
@@ -1875,6 +1935,9 @@
                 if (isOnline && firebaseReady) {
                     await saveBulkDataToFirebase(category, appData.as[category]);
                 }
+                
+                // 로컬 스토리지에 백업
+                saveToLocalStorage();
             } catch (error) {
                 console.error('저장 오류:', error);
                 showConfirm('온라인 저장에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
@@ -2004,6 +2067,9 @@
                             await saveBulkDataToFirebase(cat, appData.as[cat]);
                         }
                     }
+                    
+                    // 로컬 스토리지에 백업
+                    saveToLocalStorage();
                 } catch (error) {
                     console.error('삭제 오류:', error);
                     showConfirm('온라인 삭제에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
@@ -2039,6 +2105,9 @@
                         await clearCategoryInFirebase(category);
                     }
                     appData.as[category] = [];
+                    
+                    // 로컬 스토리지에서도 해당 카테고리 초기화
+                    saveToLocalStorage();
                 } catch (error) {
                     console.error('데이터 초기화 오류:', error);
                     showConfirm('온라인 데이터 초기화에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
@@ -2181,13 +2250,19 @@
             });
             document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
 
-            // Firebase 초기화 및 데이터 로드
+            // 데이터 로드 (로컬 스토리지 우선, Firebase 보조)
             showLoading();
+            
+            // 먼저 로컬 스토리지에서 데이터 로드 시도
+            const localDataLoaded = loadFromLocalStorage();
+            
             const firebaseInitialized = await initFirebase();
             if (firebaseInitialized) {
                 await loadAllDataFromFirebase();
+            } else if (!localDataLoaded) {
+                showConfirm("Firebase 연결에 실패했고 로컬 데이터도 없습니다. 오프라인 모드로 실행됩니다.", () => {});
             } else {
-                showConfirm("Firebase 연결에 실패했습니다. 오프라인 모드로 실행됩니다.", () => {});
+                showConfirm("Firebase 연결에 실패했습니다. 로컬 저장된 데이터로 실행됩니다.", () => {});
             }
             hideLoading();
 
@@ -2196,6 +2271,17 @@
 
             // Show dashboard by default
             showAsSubTab('dashboard');
+            
+            // 로컬 데이터가 로드된 경우 화면 렌더링
+            if (localDataLoaded) {
+                renderAsDashboard();
+                renderAsIntegrated();
+                Object.keys(AS_CONFIG).forEach(cat => {
+                    if (document.getElementById(`as-${cat}-content`)) {
+                        renderAsCategory(cat);
+                    }
+                });
+            }
 
             // 온라인/오프라인 상태 모니터링
             window.addEventListener('online', async () => {
@@ -2205,6 +2291,15 @@
                     // 온라인 복구 시 데이터 동기화
                     await loadAllDataFromFirebase();
                     // 현재 화면 갱신
+                    if (asState.activeTab === 'dashboard') {
+                        renderAsDashboard();
+                    } else if (asState.activeTab === 'integrated') {
+                        renderAsIntegrated();
+                    } else {
+                        renderAsCategory(asState.activeTab);
+                    }
+                } else {
+                    // Firebase 연결 실패 시 로컬 데이터로 화면 갱신
                     if (asState.activeTab === 'dashboard') {
                         renderAsDashboard();
                     } else if (asState.activeTab === 'integrated') {
