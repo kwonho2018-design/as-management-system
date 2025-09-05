@@ -19,7 +19,7 @@
     <!-- Firebase 9 SDK -->
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
-        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js';
+        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, query, orderBy, limit } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js';
         
         // Firebase 설정 (실제 프로젝트 구성)
         const firebaseConfig = {
@@ -45,8 +45,14 @@
             doc,
             updateDoc,
             deleteDoc,
-            setDoc
+            setDoc,
+            query,
+            orderBy,
+            limit
         };
+
+        // Firebase 초기화 완료 이벤트 발생
+        window.dispatchEvent(new Event('firebaseReady'));
     </script>
 
     <style>
@@ -154,7 +160,7 @@
                 <div class="flex items-center space-x-3">
                     <i class="fas fa-tools text-2xl text-blue-400"></i>
                     <h1 class="text-2xl font-bold text-white">A/S 통합 관리 시스템</h1>
-                    <div id="connection-status" class="status-indicator status-offline">오프라인</div>
+                    <div id="connection-status" class="status-indicator status-offline">연결 중...</div>
                 </div>
                 <div class="flex items-center space-x-4">
                     <div id="loading-indicator" class="loading-spinner" style="display: none;"></div>
@@ -205,6 +211,8 @@
     <script>
         // --- Global State ---
         let isOnline = false;
+        let firebaseReady = false;
+        
         const appData = {
             as: {
                 general: [],
@@ -239,9 +247,58 @@
 
         // --- Config ---
         const AS_CONFIG = {
-            general: { name: '기타제품', store: 'as_general', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '불량 자재코드': '불량자재코드', '대체 자재 코드': '대체자재코드', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } },
-            converter: { name: '컨버터', store: 'as_converter', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '컨버터 번호': '컨버터번호', '컨버터 코드': '컨버터코드', '설치 위치': '설치위치', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } },
-            floodlight: { name: '투광등', store: 'as_floodlight', fields: { 'NO.': 'NO.', '구분': '구분', '클레임 NO.': '클레임NO', '호선번호': '호선번호', '불량 자재코드': '불량자재코드', '대체 자재 코드': '대체자재코드', '제품명': '제품명', '수량': '수량', '접수일': '접수일', '완료일': '완료일', '비고': '비고' } }
+            general: { 
+                name: '기타제품', 
+                store: 'as_general', 
+                fields: { 
+                    'NO.': 'NO.', 
+                    '구분': '구분', 
+                    '클레임 NO.': '클레임NO', 
+                    '호선번호': '호선번호', 
+                    '불량 자재코드': '불량자재코드', 
+                    '대체 자재 코드': '대체자재코드', 
+                    '제품명': '제품명', 
+                    '수량': '수량', 
+                    '접수일': '접수일', 
+                    '완료일': '완료일', 
+                    '비고': '비고' 
+                } 
+            },
+            converter: { 
+                name: '컨버터', 
+                store: 'as_converter', 
+                fields: { 
+                    'NO.': 'NO.', 
+                    '구분': '구분', 
+                    '클레임 NO.': '클레임NO', 
+                    '호선번호': '호선번호', 
+                    '컨버터 번호': '컨버터번호', 
+                    '컨버터 코드': '컨버터코드', 
+                    '설치 위치': '설치위치', 
+                    '제품명': '제품명', 
+                    '수량': '수량', 
+                    '접수일': '접수일', 
+                    '완료일': '완료일', 
+                    '비고': '비고' 
+                } 
+            },
+            floodlight: { 
+                name: '투광등', 
+                store: 'as_floodlight', 
+                fields: { 
+                    'NO.': 'NO.', 
+                    '구분': '구분', 
+                    '클레임 NO.': '클레임NO', 
+                    '호선번호': '호선번호', 
+                    '불량 자재코드': '불량자재코드', 
+                    '대체 자재 코드': '대체자재코드', 
+                    '제품명': '제품명', 
+                    '수량': '수량', 
+                    '접수일': '접수일', 
+                    '완료일': '완료일', 
+                    '비고': '비고' 
+                } 
+            }
         };
 
         // --- Utility Functions ---
@@ -255,12 +312,25 @@
 
         function formatDate(date) {
             if (!date && date !== 0) return '';
+            
+            // 이미 YYYY-MM-DD 형식인 경우 그대로 반환
+            if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                return date;
+            }
+            
             const d = new Date(date);
             if (isNaN(d.getTime())) {
-                const excelEpoch = new Date(1899, 11, 30);
-                d.setTime(excelEpoch.getTime() + (Number(date) - 1) * 86400000);
+                // Excel serial date number 처리
+                if (typeof date === 'number' && date > 0) {
+                    const excelEpoch = new Date(1899, 11, 30);
+                    d.setTime(excelEpoch.getTime() + (Number(date) - 1) * 86400000);
+                } else {
+                    return '';
+                }
             }
+            
             if (isNaN(d.getTime())) return '';
+            
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
             const day = String(d.getDate()).padStart(2, '0');
@@ -287,11 +357,11 @@
         function updateConnectionStatus(online) {
             isOnline = online;
             const statusEl = document.getElementById('connection-status');
-            if (online) {
+            if (online && firebaseReady) {
                 statusEl.textContent = '온라인';
                 statusEl.className = 'status-indicator status-online';
             } else {
-                statusEl.textContent = '오프라인';
+                statusEl.textContent = firebaseReady ? '오프라인' : '연결 중...';
                 statusEl.className = 'status-indicator status-offline';
             }
         }
@@ -301,7 +371,7 @@
             try {
                 // Firebase 모듈이 로드될 때까지 대기
                 let attempts = 0;
-                while (!window.firebaseDB && attempts < 50) {
+                while (!window.firebaseDB && attempts < 100) {
                     await new Promise(resolve => setTimeout(resolve, 100));
                     attempts++;
                 }
@@ -310,17 +380,31 @@
                     throw new Error('Firebase 초기화 실패');
                 }
                 
+                // 연결 테스트
+                const testDoc = await window.firebaseOperations.getDocs(
+                    window.firebaseOperations.query(
+                        window.firebaseOperations.collection(window.firebaseDB, 'test'),
+                        window.firebaseOperations.limit(1)
+                    )
+                );
+                
+                firebaseReady = true;
                 updateConnectionStatus(true);
+                console.log('Firebase 연결 성공');
                 return true;
             } catch (error) {
                 console.error('Firebase 초기화 오류:', error);
+                firebaseReady = false;
                 updateConnectionStatus(false);
                 return false;
             }
         }
 
         async function loadAllDataFromFirebase() {
-            if (!window.firebaseDB || !isOnline) return;
+            if (!window.firebaseDB || !isOnline || !firebaseReady) {
+                console.log('Firebase 로드 조건 미충족:', { firebaseDB: !!window.firebaseDB, isOnline, firebaseReady });
+                return;
+            }
             
             showLoading();
             try {
@@ -328,21 +412,34 @@
                 
                 // 각 카테고리별 데이터 로드
                 for (const category of Object.keys(AS_CONFIG)) {
-                    const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
-                    appData.as[category] = [];
-                    querySnapshot.forEach((doc) => {
-                        appData.as[category].push({ id: doc.id, ...doc.data() });
-                    });
-                    asReindex(category);
+                    try {
+                        const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
+                        appData.as[category] = [];
+                        querySnapshot.forEach((doc) => {
+                            const data = doc.data();
+                            // ID 일관성 보장
+                            data.id = data.id || doc.id;
+                            appData.as[category].push(data);
+                        });
+                        asReindex(category);
+                        console.log(`${AS_CONFIG[category].name} 데이터 로드 완료: ${appData.as[category].length}개`);
+                    } catch (error) {
+                        console.error(`${AS_CONFIG[category].name} 데이터 로드 오류:`, error);
+                    }
                 }
 
                 // 최근 활동 로드
-                const activitiesSnapshot = await getDocs(collection(window.firebaseDB, 'recentActivities'));
-                appData.recentActivities = [];
-                activitiesSnapshot.forEach((doc) => {
-                    appData.recentActivities.push({ id: doc.id, ...doc.data() });
-                });
-                appData.recentActivities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                try {
+                    const activitiesSnapshot = await getDocs(collection(window.firebaseDB, 'recentActivities'));
+                    appData.recentActivities = [];
+                    activitiesSnapshot.forEach((doc) => {
+                        appData.recentActivities.push({ id: doc.id, ...doc.data() });
+                    });
+                    appData.recentActivities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                    console.log('최근 활동 로드 완료:', appData.recentActivities.length);
+                } catch (error) {
+                    console.error('최근 활동 로드 오류:', error);
+                }
 
             } catch (error) {
                 console.error('데이터 로드 오류:', error);
@@ -353,31 +450,34 @@
         }
 
         async function saveItemToFirebase(category, item) {
-            if (!window.firebaseDB || !isOnline) return;
+            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
             
             try {
                 const { doc, setDoc } = window.firebaseOperations;
-                await setDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id)), item);
+                const docRef = doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id));
+                await setDoc(docRef, item);
+                console.log(`${AS_CONFIG[category].name} 항목 저장 완료:`, item.id);
             } catch (error) {
-                console.error('데이터 저장 오류:', error);
+                console.error(`${AS_CONFIG[category].name} 데이터 저장 오류:`, error);
                 throw error;
             }
         }
 
         async function deleteItemFromFirebase(category, itemId) {
-            if (!window.firebaseDB || !isOnline) return;
+            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
             
             try {
                 const { doc, deleteDoc } = window.firebaseOperations;
                 await deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(itemId)));
+                console.log(`${AS_CONFIG[category].name} 항목 삭제 완료:`, itemId);
             } catch (error) {
-                console.error('데이터 삭제 오류:', error);
+                console.error(`${AS_CONFIG[category].name} 데이터 삭제 오류:`, error);
                 throw error;
             }
         }
 
         async function saveBulkDataToFirebase(category, items) {
-            if (!window.firebaseDB || !isOnline) return;
+            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
             
             showLoading();
             try {
@@ -386,8 +486,9 @@
                     setDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id)), item)
                 );
                 await Promise.all(promises);
+                console.log(`${AS_CONFIG[category].name} 대량 저장 완료: ${items.length}개`);
             } catch (error) {
-                console.error('대량 데이터 저장 오류:', error);
+                console.error(`${AS_CONFIG[category].name} 대량 데이터 저장 오류:`, error);
                 throw error;
             } finally {
                 hideLoading();
@@ -395,7 +496,7 @@
         }
 
         async function clearCategoryInFirebase(category) {
-            if (!window.firebaseDB || !isOnline) return;
+            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
             
             showLoading();
             try {
@@ -406,8 +507,9 @@
                     deletePromises.push(deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, docSnapshot.id)));
                 });
                 await Promise.all(deletePromises);
+                console.log(`${AS_CONFIG[category].name} 데이터 초기화 완료`);
             } catch (error) {
-                console.error('카테고리 데이터 삭제 오류:', error);
+                console.error(`${AS_CONFIG[category].name} 카테고리 데이터 삭제 오류:`, error);
                 throw error;
             } finally {
                 hideLoading();
@@ -430,7 +532,7 @@
                 appData.recentActivities.pop();
             }
             
-            if (isOnline) {
+            if (isOnline && firebaseReady) {
                 try {
                     const { doc, setDoc } = window.firebaseOperations;
                     await setDoc(doc(window.firebaseDB, 'recentActivities', String(activity.id)), activity);
@@ -922,26 +1024,23 @@
                     const categorizedData = { general: [], converter: [], floodlight: [] };
                     const importStats = { general: 0, converter: 0, floodlight: 0 };
 
-                    jsonData.forEach(row => {
-                        // 카테고리 결정 로직 개선
+                    console.log('엑셀 데이터 처리 시작:', jsonData.length, '개 행');
+
+                    jsonData.forEach((row, index) => {
+                        // 카테고리 결정 로직 - 엑셀 파일 구조에 맞게 수정
                         let category = null;
                         
                         // 1. 시스템 컬럼 우선 확인 (정확한 매칭)
                         if (row['시스템']) {
                             const systemValue = String(row['시스템']).trim();
+                            console.log(`행 ${index + 1}: 시스템 = "${systemValue}"`);
+                            
                             if (systemValue === '컨버터') {
                                 category = 'converter';
                             } else if (systemValue === '투광등') {
                                 category = 'floodlight';
                             } else if (systemValue === '기타제품') {
-                                // 기타제품이지만 실제로는 다른 카테고리일 수 있으므로 추가 확인
-                                if (row['컨버터 번호'] || row['컨버터 코드'] || row['설치 위치']) {
-                                    category = 'converter';
-                                } else if (row['제품명'] && String(row['제품명']).toLowerCase().includes('투광')) {
-                                    category = 'floodlight';
-                                } else {
-                                    category = 'general';
-                                }
+                                category = 'general';
                             }
                         }
                         
@@ -956,20 +1055,27 @@
                             }
                         }
 
+                        console.log(`행 ${index + 1}: 최종 카테고리 = ${category}`);
+
                         const cfg = AS_CONFIG[category];
-                        const newItem = { id: Date.now() + Math.random() * 1000, status: 'incomplete' };
+                        const newItem = { 
+                            id: Date.now() + Math.random() * 1000 + index, 
+                            status: 'incomplete' 
+                        };
 
                         // 공통 필드 매핑
                         for (const header in cfg.fields) {
                             const key = cfg.fields[header];
-                            let value = row[header];
+                            let value = row[header] || '';
+                            
                             if (key === '접수일' || key === '완료일') {
                                 value = formatDate(value);
                             } else if (key === '수량') {
                                 value = parseInt(value) || 0;
                             }
-                            newItem[key] = value || '';
+                            newItem[key] = value;
                         }
+                        
                         // 상태 컬럼이 있는 경우 반영
                         if (row['상태']) {
                             const st = String(row['상태']).trim();
@@ -985,12 +1091,14 @@
                         importStats[category]++;
                     });
 
+                    console.log('분류 결과:', importStats);
+
                     showLoading();
                     for (const category in categorizedData) {
                         if (categorizedData[category].length > 0) {
                             appData.as[category].push(...categorizedData[category]);
                             asReindex(category);
-                            if (isOnline) {
+                            if (isOnline && firebaseReady) {
                                 await saveBulkDataToFirebase(category, appData.as[category]);
                             }
                         }
@@ -1532,11 +1640,11 @@
                     }
 
                     const config = AS_CONFIG[category];
-                    const newItems = jsonData.map(row => {
-                        const newItem = { id: Date.now() + Math.random() * 1000 };
+                    const newItems = jsonData.map((row, index) => {
+                        const newItem = { id: Date.now() + Math.random() * 1000 + index };
                         for (const header in config.fields) {
                             const key = config.fields[header];
-                            let value = row[header];
+                            let value = row[header] || '';
                             if (key === '접수일' || key === '완료일') {
                                 value = formatDate(value);
                             } else if (key === '수량') {
@@ -1551,7 +1659,7 @@
                     appData.as[category].push(...newItems);
                     asReindex(category);
                     
-                    if (isOnline) {
+                    if (isOnline && firebaseReady) {
                         await saveBulkDataToFirebase(category, appData.as[category]);
                     }
 
@@ -1760,11 +1868,11 @@
             }
 
             try {
-                if (isOnline) {
+                if (isOnline && firebaseReady) {
                     await saveItemToFirebase(category, item);
                 }
                 asReindex(category);
-                if (isOnline) {
+                if (isOnline && firebaseReady) {
                     await saveBulkDataToFirebase(category, appData.as[category]);
                 }
             } catch (error) {
@@ -1829,7 +1937,7 @@
             }
 
             try {
-                if (isOnline) {
+                if (isOnline && firebaseReady) {
                     await saveItemToFirebase(category, item);
                 }
             } catch (error) {
@@ -1869,7 +1977,7 @@
                             for (const category of Object.keys(AS_CONFIG)) {
                                 const index = appData.as[category].findIndex(item => item.id == id);
                                 if (index > -1) {
-                                    if (isOnline) {
+                                    if (isOnline && firebaseReady) {
                                         await deleteItemFromFirebase(category, id);
                                     }
                                     appData.as[category].splice(index, 1);
@@ -1881,7 +1989,7 @@
                         }
                     } else {
                         for (const id of selectedIds) {
-                            if (isOnline) {
+                            if (isOnline && firebaseReady) {
                                 await deleteItemFromFirebase(context, id);
                             }
                         }
@@ -1892,7 +2000,7 @@
 
                     for (const cat of categoriesToReindex) {
                         asReindex(cat);
-                        if (isOnline) {
+                        if (isOnline && firebaseReady) {
                             await saveBulkDataToFirebase(cat, appData.as[cat]);
                         }
                     }
@@ -1927,7 +2035,7 @@
             showConfirm(`${config.name}의 모든 데이터를 정말 삭제하시겠습니까?`, async () => {
                 showLoading();
                 try {
-                    if (isOnline) {
+                    if (isOnline && firebaseReady) {
                         await clearCategoryInFirebase(category);
                     }
                     appData.as[category] = [];
@@ -2090,18 +2198,36 @@
             showAsSubTab('dashboard');
 
             // 온라인/오프라인 상태 모니터링
-            window.addEventListener('online', () => {
-                updateConnectionStatus(true);
-                // 온라인 복구 시 데이터 동기화
-                loadAllDataFromFirebase();
+            window.addEventListener('online', async () => {
+                console.log('온라인 상태로 변경됨');
+                const reconnected = await initFirebase();
+                if (reconnected) {
+                    // 온라인 복구 시 데이터 동기화
+                    await loadAllDataFromFirebase();
+                    // 현재 화면 갱신
+                    if (asState.activeTab === 'dashboard') {
+                        renderAsDashboard();
+                    } else if (asState.activeTab === 'integrated') {
+                        renderAsIntegrated();
+                    } else {
+                        renderAsCategory(asState.activeTab);
+                    }
+                }
             });
 
             window.addEventListener('offline', () => {
+                console.log('오프라인 상태로 변경됨');
                 updateConnectionStatus(false);
             });
 
+            // Firebase ready 이벤트 리스너
+            window.addEventListener('firebaseReady', () => {
+                console.log('Firebase 준비 완료');
+                updateConnectionStatus(navigator.onLine);
+            });
+
             // 초기 연결 상태 확인
-            updateConnectionStatus(navigator.onLine && isOnline);
+            updateConnectionStatus(navigator.onLine && firebaseReady);
 
             // Keyboard shortcuts
             document.addEventListener('keydown', (event) => {
