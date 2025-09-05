@@ -21,14 +21,15 @@
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
         import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js';
         
-        // Firebase 설정 (공개 데이터베이스)
+        // Firebase 설정 (실제 프로젝트 구성)
         const firebaseConfig = {
-            apiKey: "AIzaSyDY8Q7mYJg1x7Wn9Z7K5JL6nN0P8QR2sT4",
-            authDomain: "as-management-demo.firebaseapp.com",
-            projectId: "as-management-demo",
-            storageBucket: "as-management-demo.appspot.com",
-            messagingSenderId: "123456789012",
-            appId: "1:123456789012:web:abc123def456ghi789"
+            apiKey: "AIzaSyDL6_y_1zFcBBRjCQczFMaBbqHXtGnzoL8",
+            authDomain: "as-system-c4ce8.firebaseapp.com",
+            projectId: "as-system-c4ce8",
+            storageBucket: "as-system-c4ce8.firebasestorage.app",
+            messagingSenderId: "835934257461",
+            appId: "1:835934257461:web:1ae2bd8b56e2d62cb68c7c",
+            measurementId: "G-QW0QZ7BED0"
         };
 
         // Firebase 초기화
@@ -1671,7 +1672,7 @@
             currentModalType = `as-${category}`;
             currentEditId = id;
             const isEdit = !!id;
-            const item = isEdit ? appData.as[category].find(i => i.id === id) : {};
+            const item = isEdit ? appData.as[category].find(i => i.id == id) : {};
 
             const autocompleteFields = {
                 general: ['불량자재코드', '대체자재코드'],
@@ -1726,7 +1727,7 @@
             const cfg = AS_CONFIG[category];
             const isEdit = !!currentEditId;
             const id = isEdit ? currentEditId : Date.now();
-            let item = isEdit ? {...appData.as[category].find(i => i.id === id)} : {id, status: 'incomplete'};
+            let item = isEdit ? {...appData.as[category].find(i => i.id == id)} : {id, status: 'incomplete'};
 
             if(!isEdit) item['NO.'] = asGetNextNo(category);
 
@@ -1737,7 +1738,7 @@
             });
 
             if(isEdit){
-                const idx = appData.as[category].findIndex(i => i.id === id);
+                const idx = appData.as[category].findIndex(i => i.id == id);
                 appData.as[category][idx] = item;
             } else {
                 appData.as[category].push(item);
