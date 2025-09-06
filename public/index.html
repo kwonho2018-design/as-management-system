@@ -541,19 +541,22 @@
             return out;
         }
 
-        async function serverBulkSaveCategory(category, items, clearFirst = true) {
+        async function serverBulkSaveCategory(category, items, clearFirst = true, withLoading = true) {
             const url = `${SERVER_BASE_URL}/api/bulk/${category}`;
             const payload = {
                 items: items.map(it => toServerItem(category, it)),
                 clearFirst
             };
+            if (withLoading) showLoading();
             const res = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
             if (!res.ok) throw new Error(`서버 저장 실패(${category}): ${res.status}`);
-            return res.json();
+            const json = await res.json();
+            if (withLoading) hideLoading();
+            return json;
         }
 
         async function serverFetchCategory(category) {
@@ -598,6 +601,24 @@
                 showConfirm(`서버 불러오기 실패: ${err.message}`, () => {});
             } finally {
                 hideLoading();
+            }
+        }
+
+        async function loadFromServerAllSilent() {
+            for (const category of Object.keys(AS_CONFIG)) {
+                const list = await serverFetchCategory(category);
+                appData.as[category] = list;
+                asReindex(category);
+            }
+            saveToLocalStorage();
+        }
+
+        async function syncCategoryToServer(category) {
+            try {
+                if (!navigator.onLine) return;
+                await serverBulkSaveCategory(category, appData.as[category], true, false);
+            } catch (e) {
+                console.warn('서버 동기화 실패:', category, e);
             }
         }
 
@@ -1332,6 +1353,7 @@
                             if (navigator.onLine && window.firebaseDB) {
                                 await saveBulkDataToFirebase(category, appData.as[category]);
                             }
+                            await syncCategoryToServer(category);
                         }
                     }
                     
@@ -1896,6 +1918,7 @@
                     if (navigator.onLine && window.firebaseDB) {
                         await saveBulkDataToFirebase(category, appData.as[category]);
                     }
+                    await syncCategoryToServer(category);
                     
                     // 로컬 스토리지에 백업
                     saveToLocalStorage();
@@ -2109,9 +2132,8 @@
                     await saveItemToFirebase(category, item);
                 }
                 asReindex(category);
-                if (navigator.onLine && window.firebaseDB) {
-                    await saveBulkDataToFirebase(category, appData.as[category]);
-                }
+                // Render 서버 자동 동기화
+                await syncCategoryToServer(category);
                 
                 // 로컬 스토리지에 백업
                 saveToLocalStorage();
@@ -2180,6 +2202,7 @@
                 if (navigator.onLine && window.firebaseDB) {
                     await saveItemToFirebase(category, item);
                 }
+                await syncCategoryToServer(category);
             } catch (error) {
                 console.error('완료 처리 저장 오류:', error);
                 showConfirm('온라인 저장에 실패했습니다. 인터넷 연결을 확인해주세요.', () => {});
@@ -2243,6 +2266,7 @@
                         if (navigator.onLine && window.firebaseDB) {
                             await saveBulkDataToFirebase(cat, appData.as[cat]);
                         }
+                        await syncCategoryToServer(cat);
                     }
                     
                     // 로컬 스토리지에 백업
@@ -2282,6 +2306,7 @@
                         await clearCategoryInFirebase(category);
                     }
                     appData.as[category] = [];
+                    await syncCategoryToServer(category);
                     
                     // 로컬 스토리지에서도 해당 카테고리 초기화
                     saveToLocalStorage();
@@ -2427,19 +2452,28 @@
             });
             document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
 
-            // 데이터 로드 (로컬 스토리지 우선, Firebase 보조)
+            // 데이터 로드 (서버 우선, 로컬 백업, Firebase 보조)
             showLoading();
-            
-            // 먼저 로컬 스토리지에서 데이터 로드 시도
+
             const localDataLoaded = loadFromLocalStorage();
-            
+            let serverLoaded = false;
+            if (navigator.onLine) {
+                try {
+                    await loadFromServerAllSilent();
+                    serverLoaded = true;
+                    console.log('서버 데이터 로드 완료');
+                } catch (e) {
+                    console.warn('서버 데이터 로드 실패:', e);
+                }
+            }
+
             const firebaseInitialized = await initFirebase();
-            if (firebaseInitialized) {
+            if (!serverLoaded && firebaseInitialized) {
                 await loadAllDataFromFirebase();
-            } else if (!localDataLoaded) {
-                showConfirm("Firebase 연결에 실패했고 로컬 데이터도 없습니다. 오프라인 모드로 실행됩니다.", () => {});
-            } else {
-                showConfirm("Firebase 연결에 실패했습니다. 로컬 저장된 데이터로 실행됩니다.", () => {});
+            } else if (!serverLoaded && !localDataLoaded) {
+                showConfirm("서버/Firestore 연결에 실패했고 로컬 데이터도 없습니다. 오프라인 모드로 실행됩니다.", () => {});
+            } else if (!serverLoaded && localDataLoaded) {
+                showConfirm("서버/Firestore 연결에 실패했습니다. 로컬 저장된 데이터로 실행됩니다.", () => {});
             }
             hideLoading();
 
@@ -2463,27 +2497,26 @@
             // 온라인/오프라인 상태 모니터링
             window.addEventListener('online', async () => {
                 console.log('온라인 상태로 변경됨');
-                const reconnected = await initFirebase();
-                if (reconnected) {
-                    // 온라인 복구 시 데이터 동기화
-                    await loadAllDataFromFirebase();
-                    // 현재 화면 갱신
-                    if (asState.activeTab === 'dashboard') {
-                        renderAsDashboard();
-                    } else if (asState.activeTab === 'integrated') {
-                        renderAsIntegrated();
-                    } else {
-                        renderAsCategory(asState.activeTab);
+                let refreshed = false;
+                try {
+                    await loadFromServerAllSilent();
+                    refreshed = true;
+                } catch (e) {
+                    console.warn('서버 재로드 실패:', e);
+                }
+                if (!refreshed) {
+                    const reconnected = await initFirebase();
+                    if (reconnected) {
+                        await loadAllDataFromFirebase();
                     }
+                }
+                // 현재 화면 갱신
+                if (asState.activeTab === 'dashboard') {
+                    renderAsDashboard();
+                } else if (asState.activeTab === 'integrated') {
+                    renderAsIntegrated();
                 } else {
-                    // Firebase 연결 실패 시 로컬 데이터로 화면 갱신
-                    if (asState.activeTab === 'dashboard') {
-                        renderAsDashboard();
-                    } else if (asState.activeTab === 'integrated') {
-                        renderAsIntegrated();
-                    } else {
-                        renderAsCategory(asState.activeTab);
-                    }
+                    renderAsCategory(asState.activeTab);
                 }
             });
 
