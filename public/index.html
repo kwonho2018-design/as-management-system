@@ -425,19 +425,43 @@
                 if (!window.firebaseDB) {
                     throw new Error('Firebase 초기화 실패');
                 }
-                
-                // 연결 테스트
-                const testDoc = await window.firebaseOperations.getDocs(
-                    window.firebaseOperations.query(
-                        window.firebaseOperations.collection(window.firebaseDB, 'test'),
-                        window.firebaseOperations.limit(1)
-                    )
-                );
-                
-                firebaseReady = true;
-                updateConnectionStatus(true);
-                console.log('Firebase 연결 성공');
-                return true;
+
+                // 연결/권한 테스트: 실제 사용 컬렉션 중 하나에서 시도
+                try {
+                    const { collection, getDocs, limit, query } = window.firebaseOperations;
+                    let anySucceeded = false;
+                    for (const category of Object.keys(AS_CONFIG)) {
+                        try {
+                            await getDocs(query(collection(window.firebaseDB, AS_CONFIG[category].store), limit(1)));
+                            anySucceeded = true;
+                            break;
+                        } catch (err) {
+                            console.warn(`컬렉션 접근 실패(${AS_CONFIG[category].store}):`, err?.code || err?.message || err);
+                        }
+                    }
+
+                    // 최근 활동 컬렉션도 시도
+                    if (!anySucceeded) {
+                        try {
+                            await getDocs(query(collection(window.firebaseDB, 'recentActivities'), limit(1)));
+                            anySucceeded = true;
+                        } catch (err) {
+                            console.warn('recentActivities 접근 실패:', err?.code || err?.message || err);
+                        }
+                    }
+
+                    // 접근 테스트 결과와 무관하게 DB 초기화는 완료됨
+                    firebaseReady = anySucceeded;
+                    updateConnectionStatus(navigator.onLine);
+                    console.log(`Firebase 초기화 완료 (접근성:${anySucceeded ? 'OK' : '제한'})`);
+                    return true;
+                } catch (probeErr) {
+                    // 프로브 자체 실패 시에도 DB는 초기화되어 있으므로 이후 동작에서 재시도
+                    console.warn('Firebase 접근성 프로브 오류:', probeErr);
+                    firebaseReady = false;
+                    updateConnectionStatus(navigator.onLine);
+                    return true;
+                }
             } catch (error) {
                 console.error('Firebase 초기화 오류:', error);
                 firebaseReady = false;
@@ -447,8 +471,8 @@
         }
 
         async function loadAllDataFromFirebase() {
-            if (!window.firebaseDB || !isOnline || !firebaseReady) {
-                console.log('Firebase 로드 조건 미충족:', { firebaseDB: !!window.firebaseDB, isOnline, firebaseReady });
+            if (!window.firebaseDB || !navigator.onLine) {
+                console.log('Firebase 로드 조건 미충족:', { firebaseDB: !!window.firebaseDB, online: navigator.onLine, firebaseReady });
                 return;
             }
 
@@ -522,7 +546,8 @@
         }
 
         async function saveItemToFirebase(category, item) {
-            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
+            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
+            if (!navigator.onLine) { console.warn('오프라인 상태: 원격 저장 생략'); return; }
             
             try {
                 const { doc, setDoc } = window.firebaseOperations;
@@ -536,7 +561,8 @@
         }
 
         async function deleteItemFromFirebase(category, itemId) {
-            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
+            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
+            if (!navigator.onLine) { console.warn('오프라인 상태: 원격 삭제 생략'); return; }
             
             try {
                 const { doc, deleteDoc } = window.firebaseOperations;
@@ -549,7 +575,8 @@
         }
 
         async function saveBulkDataToFirebase(category, items) {
-            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
+            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
+            if (!navigator.onLine) { console.warn('오프라인 상태: 대량 저장 생략'); return; }
             
             showLoading();
             try {
@@ -568,7 +595,8 @@
         }
 
         async function clearCategoryInFirebase(category) {
-            if (!window.firebaseDB || !isOnline || !firebaseReady) return;
+            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
+            if (!navigator.onLine) { console.warn('오프라인 상태: 컬렉션 초기화 생략'); return; }
             
             showLoading();
             try {
@@ -604,7 +632,7 @@
                 appData.recentActivities.pop();
             }
             
-            if (isOnline && firebaseReady) {
+            if (navigator.onLine && window.firebaseDB) {
                 try {
                     const { doc, setDoc } = window.firebaseOperations;
                     await setDoc(doc(window.firebaseDB, 'recentActivities', String(activity.id)), activity);
@@ -1170,7 +1198,7 @@
                         if (categorizedData[category].length > 0) {
                             appData.as[category].push(...categorizedData[category]);
                             asReindex(category);
-                            if (isOnline && firebaseReady) {
+                            if (navigator.onLine && window.firebaseDB) {
                                 await saveBulkDataToFirebase(category, appData.as[category]);
                             }
                         }
@@ -1734,7 +1762,7 @@
                     appData.as[category].push(...newItems);
                     asReindex(category);
                     
-                    if (isOnline && firebaseReady) {
+                    if (navigator.onLine && window.firebaseDB) {
                         await saveBulkDataToFirebase(category, appData.as[category]);
                     }
                     
@@ -1946,11 +1974,11 @@
             }
 
             try {
-                if (isOnline && firebaseReady) {
+                if (navigator.onLine && window.firebaseDB) {
                     await saveItemToFirebase(category, item);
                 }
                 asReindex(category);
-                if (isOnline && firebaseReady) {
+                if (navigator.onLine && window.firebaseDB) {
                     await saveBulkDataToFirebase(category, appData.as[category]);
                 }
                 
@@ -2018,7 +2046,7 @@
             }
 
             try {
-                if (isOnline && firebaseReady) {
+                if (navigator.onLine && window.firebaseDB) {
                     await saveItemToFirebase(category, item);
                 }
             } catch (error) {
@@ -2058,7 +2086,7 @@
                             for (const category of Object.keys(AS_CONFIG)) {
                                 const index = appData.as[category].findIndex(item => item.id == id);
                                 if (index > -1) {
-                                    if (isOnline && firebaseReady) {
+                                    if (navigator.onLine && window.firebaseDB) {
                                         await deleteItemFromFirebase(category, id);
                                     }
                                     appData.as[category].splice(index, 1);
@@ -2070,7 +2098,7 @@
                         }
                     } else {
                         for (const id of selectedIds) {
-                            if (isOnline && firebaseReady) {
+                            if (navigator.onLine && window.firebaseDB) {
                                 await deleteItemFromFirebase(context, id);
                             }
                         }
@@ -2081,7 +2109,7 @@
 
                     for (const cat of categoriesToReindex) {
                         asReindex(cat);
-                        if (isOnline && firebaseReady) {
+                        if (navigator.onLine && window.firebaseDB) {
                             await saveBulkDataToFirebase(cat, appData.as[cat]);
                         }
                     }
@@ -2119,7 +2147,7 @@
             showConfirm(`${config.name}의 모든 데이터를 정말 삭제하시겠습니까?`, async () => {
                 showLoading();
                 try {
-                    if (isOnline && firebaseReady) {
+                    if (navigator.onLine && window.firebaseDB) {
                         await clearCategoryInFirebase(category);
                     }
                     appData.as[category] = [];
