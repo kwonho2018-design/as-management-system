@@ -16,44 +16,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
     <!-- SheetJS xlsx 0.18.5 CDN -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <!-- Firebase 9 SDK -->
-    <script type="module">
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
-        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, query, orderBy, limit } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js';
-        
-        // Firebase 설정 (실제 프로젝트 구성)
-        const firebaseConfig = {
-            apiKey: "AIzaSyDL6_y_1zFcBBRjCQczFMaBbqHXtGnzoL8",
-            authDomain: "as-system-c4ce8.firebaseapp.com",
-            projectId: "as-system-c4ce8",
-            storageBucket: "as-system-c4ce8.firebasestorage.app",
-            messagingSenderId: "835934257461",
-            appId: "1:835934257461:web:1ae2bd8b56e2d62cb68c7c",
-            measurementId: "G-QW0QZ7BED0"
-        };
-
-        // Firebase 초기화
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        
-        // 전역으로 설정
-        window.firebaseDB = db;
-        window.firebaseOperations = {
-            collection,
-            addDoc,
-            getDocs,
-            doc,
-            updateDoc,
-            deleteDoc,
-            setDoc,
-            query,
-            orderBy,
-            limit
-        };
-
-        // Firebase 초기화 완료 이벤트 발생
-        window.dispatchEvent(new Event('firebaseReady'));
-    </script>
+    <!-- Firebase 제거: Render 서버 + IndexedDB로 저장/동기화 -->
 
     <style>
         body {
@@ -217,7 +180,64 @@
     <script>
         // --- Global State ---
         let isOnline = false;
-        let firebaseReady = false;
+        let firebaseReady = false; // Firebase 미사용(호환용 플래그)
+        let serverHealthy = false;
+
+        // --- IndexedDB (안정적 로컬 저장) ---
+        const IDB_DB_NAME = "asManagementDB";
+        const IDB_DB_VERSION = 1;
+        const IDB_STORE = "kv";
+        const IDB_KEY_APP = "as_data";
+        let idbPromise = null;
+
+        function idbOpen() {
+            return new Promise((resolve) => {
+                if (!("indexedDB" in window)) { resolve(null); return; }
+                const req = indexedDB.open(IDB_DB_NAME, IDB_DB_VERSION);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(IDB_STORE)) {
+                        db.createObjectStore(IDB_STORE);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        async function idbGet(key) {
+            const db = await idbPromise; if (!db) return null;
+            return new Promise((resolve) => {
+                const tx = db.transaction(IDB_STORE, "readonly");
+                const st = tx.objectStore(IDB_STORE);
+                const rq = st.get(key);
+                rq.onsuccess = () => resolve(rq.result ?? null);
+                rq.onerror = () => resolve(null);
+            });
+        }
+
+        async function idbSet(key, value) {
+            const db = await idbPromise; if (!db) return false;
+            return new Promise((resolve) => {
+                const tx = db.transaction(IDB_STORE, "readwrite");
+                tx.objectStore(IDB_STORE).put(value, key);
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => resolve(false);
+            });
+        }
+
+        async function idbDel(key) {
+            const db = await idbPromise; if (!db) return false;
+            return new Promise((resolve) => {
+                const tx = db.transaction(IDB_STORE, "readwrite");
+                tx.objectStore(IDB_STORE).delete(key);
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => resolve(false);
+            });
+        }
+
+        // IndexedDB 초기화 시작
+        idbPromise = idbOpen();
         
         const appData = {
             as: {
@@ -408,117 +428,89 @@
         function updateConnectionStatus(online) {
             isOnline = online;
             const statusEl = document.getElementById('connection-status');
-            if (online && firebaseReady) {
-                statusEl.textContent = '온라인';
+            if (online && serverHealthy) {
+                statusEl.textContent = '온라인(서버 연결됨)';
                 statusEl.className = 'status-indicator status-online';
+            } else if (online && !serverHealthy) {
+                statusEl.textContent = '온라인(서버 오류)';
+                statusEl.className = 'status-indicator status-offline';
             } else {
-                statusEl.textContent = firebaseReady ? '오프라인' : '연결 중...';
+                statusEl.textContent = '오프라인(로컬 저장)';
                 statusEl.className = 'status-indicator status-offline';
             }
         }
 
-        // --- Local Storage Operations ---
-        function saveToLocalStorage() {
+        async function checkServerHealth() {
+            try {
+                if (!navigator.onLine) { serverHealthy = false; updateConnectionStatus(false); return false; }
+                const res = await fetch(`${SERVER_BASE_URL}/healthz`, { cache: 'no-store' });
+                serverHealthy = res.ok;
+            } catch (e) {
+                serverHealthy = false;
+            }
+            updateConnectionStatus(navigator.onLine);
+            return serverHealthy;
+        }
+
+        // --- Local Storage Operations (IndexedDB + localStorage 미러) ---
+        async function saveToLocalStorage() {
             try {
                 const dataToSave = {
                     as: appData.as,
                     recentActivities: appData.recentActivities,
                     timestamp: Date.now()
                 };
-                localStorage.setItem('as_management_data', JSON.stringify(dataToSave));
-                console.log('데이터가 로컬 스토리지에 저장되었습니다.');
+                await idbSet(IDB_KEY_APP, dataToSave); // IndexedDB 우선
+                localStorage.setItem('as_management_data', JSON.stringify(dataToSave)); // 미러
+                console.log('데이터가 로컬(IndexedDB + localStorage)에 저장되었습니다.');
             } catch (error) {
-                console.error('로컬 스토리지 저장 오류:', error);
+                console.error('로컬 저장 오류:', error);
             }
         }
 
-        function loadFromLocalStorage() {
+        async function loadFromStorage() {
             try {
+                // 1) IndexedDB에서 로드
+                const dbData = await idbGet(IDB_KEY_APP);
+                if (dbData && typeof dbData === 'object') {
+                    appData.as = dbData.as || { general: [], converter: [], floodlight: [] };
+                    appData.recentActivities = dbData.recentActivities || [];
+                    Object.keys(AS_CONFIG).forEach(category => asReindex(category));
+                    console.log('IndexedDB에서 데이터를 복원했습니다.');
+                    return true;
+                }
+                // 2) localStorage에서 폴백
                 const savedData = localStorage.getItem('as_management_data');
                 if (savedData) {
                     const parsedData = JSON.parse(savedData);
                     appData.as = parsedData.as || { general: [], converter: [], floodlight: [] };
                     appData.recentActivities = parsedData.recentActivities || [];
-                    console.log('로컬 스토리지에서 데이터를 복원했습니다.');
-                    
-                    // 각 카테고리별 인덱스 재구성
-                    Object.keys(AS_CONFIG).forEach(category => {
-                        asReindex(category);
-                    });
-                    
+                    Object.keys(AS_CONFIG).forEach(category => asReindex(category));
+                    await idbSet(IDB_KEY_APP, { as: appData.as, recentActivities: appData.recentActivities, timestamp: Date.now() });
+                    console.log('localStorage에서 데이터를 복원하고 IndexedDB로 마이그레이션했습니다.');
                     return true;
                 }
             } catch (error) {
-                console.error('로컬 스토리지 로드 오류:', error);
+                console.error('로컬 데이터 로드 오류:', error);
             }
             return false;
         }
 
-        function clearLocalStorage() {
+        async function clearLocalStorage() {
             try {
                 localStorage.removeItem('as_management_data');
-                console.log('로컬 스토리지가 초기화되었습니다.');
+                await idbDel(IDB_KEY_APP);
+                console.log('로컬 저장소(IndexedDB + localStorage)가 초기화되었습니다.');
             } catch (error) {
-                console.error('로컬 스토리지 초기화 오류:', error);
+                console.error('로컬 저장소 초기화 오류:', error);
             }
         }
 
         // --- Firebase Operations ---
         async function initFirebase() {
-            try {
-                // Firebase 모듈이 로드될 때까지 대기
-                let attempts = 0;
-                while (!window.firebaseDB && attempts < 100) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    attempts++;
-                }
-                
-                if (!window.firebaseDB) {
-                    throw new Error('Firebase 초기화 실패');
-                }
-
-                // 연결/권한 테스트: 실제 사용 컬렉션 중 하나에서 시도
-                try {
-                    const { collection, getDocs, limit, query } = window.firebaseOperations;
-                    let anySucceeded = false;
-                    for (const category of Object.keys(AS_CONFIG)) {
-                        try {
-                            await getDocs(query(collection(window.firebaseDB, AS_CONFIG[category].store), limit(1)));
-                            anySucceeded = true;
-                            break;
-                        } catch (err) {
-                            console.warn(`컬렉션 접근 실패(${AS_CONFIG[category].store}):`, err?.code || err?.message || err);
-                        }
-                    }
-
-                    // 최근 활동 컬렉션도 시도
-                    if (!anySucceeded) {
-                        try {
-                            await getDocs(query(collection(window.firebaseDB, 'recentActivities'), limit(1)));
-                            anySucceeded = true;
-                        } catch (err) {
-                            console.warn('recentActivities 접근 실패:', err?.code || err?.message || err);
-                        }
-                    }
-
-                    // 접근 테스트 결과와 무관하게 DB 초기화는 완료됨
-                    firebaseReady = anySucceeded;
-                    updateConnectionStatus(navigator.onLine);
-                    console.log(`Firebase 초기화 완료 (접근성:${anySucceeded ? 'OK' : '제한'})`);
-                    return true;
-                } catch (probeErr) {
-                    // 프로브 자체 실패 시에도 DB는 초기화되어 있으므로 이후 동작에서 재시도
-                    console.warn('Firebase 접근성 프로브 오류:', probeErr);
-                    firebaseReady = false;
-                    updateConnectionStatus(navigator.onLine);
-                    return true;
-                }
-            } catch (error) {
-                console.error('Firebase 초기화 오류:', error);
-                firebaseReady = false;
-                updateConnectionStatus(false);
-                return false;
-            }
+            // Firebase 사용 안 함: 즉시 비활성 처리
+            firebaseReady = false;
+            return false;
         }
 
         // --- Server API Operations ---
@@ -622,151 +614,15 @@
             }
         }
 
-        async function loadAllDataFromFirebase() {
-            if (!window.firebaseDB || !navigator.onLine) {
-                console.log('Firebase 로드 조건 미충족:', { firebaseDB: !!window.firebaseDB, online: navigator.onLine, firebaseReady });
-                return;
-            }
+        async function loadAllDataFromFirebase() { /* Firebase 비활성화 */ }
 
-            showLoading();
-            try {
-                const { collection, getDocs } = window.firebaseOperations;
+        async function saveItemToFirebase() { /* Firebase 비활성화 */ }
 
-                // 원격 데이터 임시 저장소 (덮어쓰기 방지)
-                const remoteData = { general: [], converter: [], floodlight: [] };
+        async function deleteItemFromFirebase() { /* Firebase 비활성화 */ }
 
-                // 각 카테고리별 데이터 로드
-                for (const category of Object.keys(AS_CONFIG)) {
-                    try {
-                        console.log(`${AS_CONFIG[category].name} 데이터 로드 시작... 스토어: ${AS_CONFIG[category].store}`);
-                        const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
-                        querySnapshot.forEach((doc) => {
-                            const data = doc.data();
-                            // ID 일관성 보장
-                            data.id = data.id || doc.id;
-                            remoteData[category].push(data);
-                        });
-                        console.log(`${AS_CONFIG[category].name} 원격 로드 수: ${remoteData[category].length}개`);
-                    } catch (error) {
-                        console.error(`${AS_CONFIG[category].name} 데이터 로드 오류:`, error);
-                        console.error(`스토어 경로: ${AS_CONFIG[category].store}`);
-                    }
-                }
+        async function saveBulkDataToFirebase() { /* Firebase 비활성화 */ }
 
-                const remoteTotal = Object.values(remoteData).reduce((sum, arr) => sum + arr.length, 0);
-                const localTotal = Object.values(appData.as).reduce((sum, arr) => sum + (arr?.length || 0), 0);
-
-                if (remoteTotal === 0 && localTotal > 0) {
-                    // 원격이 비었고 로컬에 데이터가 있으면 로컬 → 원격 동기화 (데이터 손실 방지)
-                    console.warn('원격 컬렉션이 비어 있어 로컬 데이터를 원격으로 동기화합니다.');
-                    for (const category of Object.keys(AS_CONFIG)) {
-                        if (appData.as[category]?.length) {
-                            await saveBulkDataToFirebase(category, appData.as[category]);
-                        }
-                    }
-                    // 백업 저장
-                    saveToLocalStorage();
-                } else {
-                    // 원격 데이터를 진실 소스로 사용하고 로컬 업데이트
-                    for (const category of Object.keys(AS_CONFIG)) {
-                        appData.as[category] = remoteData[category];
-                        asReindex(category);
-                    }
-                    // Firebase 데이터 로드 후 로컬 스토리지에 백업
-                    saveToLocalStorage();
-                }
-
-                // 최근 활동 로드
-                try {
-                    const activitiesSnapshot = await getDocs(collection(window.firebaseDB, 'recentActivities'));
-                    appData.recentActivities = [];
-                    activitiesSnapshot.forEach((doc) => {
-                        appData.recentActivities.push({ id: doc.id, ...doc.data() });
-                    });
-                    appData.recentActivities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                    console.log('최근 활동 로드 완료:', appData.recentActivities.length);
-                } catch (error) {
-                    console.error('최근 활동 로드 오류:', error);
-                }
-
-            } catch (error) {
-                console.error('데이터 로드 오류:', error);
-                updateConnectionStatus(false);
-            } finally {
-                hideLoading();
-            }
-        }
-
-        async function saveItemToFirebase(category, item) {
-            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
-            if (!navigator.onLine) { console.warn('오프라인 상태: 원격 저장 생략'); return; }
-            
-            try {
-                const { doc, setDoc } = window.firebaseOperations;
-                const docRef = doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id));
-                await setDoc(docRef, item);
-                console.log(`${AS_CONFIG[category].name} 항목 저장 완료:`, item.id);
-            } catch (error) {
-                console.error(`${AS_CONFIG[category].name} 데이터 저장 오류:`, error);
-                throw error;
-            }
-        }
-
-        async function deleteItemFromFirebase(category, itemId) {
-            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
-            if (!navigator.onLine) { console.warn('오프라인 상태: 원격 삭제 생략'); return; }
-            
-            try {
-                const { doc, deleteDoc } = window.firebaseOperations;
-                await deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(itemId)));
-                console.log(`${AS_CONFIG[category].name} 항목 삭제 완료:`, itemId);
-            } catch (error) {
-                console.error(`${AS_CONFIG[category].name} 데이터 삭제 오류:`, error);
-                throw error;
-            }
-        }
-
-        async function saveBulkDataToFirebase(category, items) {
-            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
-            if (!navigator.onLine) { console.warn('오프라인 상태: 대량 저장 생략'); return; }
-            
-            showLoading();
-            try {
-                const { doc, setDoc } = window.firebaseOperations;
-                const promises = items.map(item => 
-                    setDoc(doc(window.firebaseDB, AS_CONFIG[category].store, String(item.id)), item)
-                );
-                await Promise.all(promises);
-                console.log(`${AS_CONFIG[category].name} 대량 저장 완료: ${items.length}개`);
-            } catch (error) {
-                console.error(`${AS_CONFIG[category].name} 대량 데이터 저장 오류:`, error);
-                throw error;
-            } finally {
-                hideLoading();
-            }
-        }
-
-        async function clearCategoryInFirebase(category) {
-            if (!window.firebaseDB) { console.warn('Firebase DB not ready'); return; }
-            if (!navigator.onLine) { console.warn('오프라인 상태: 컬렉션 초기화 생략'); return; }
-            
-            showLoading();
-            try {
-                const { collection, getDocs, deleteDoc, doc } = window.firebaseOperations;
-                const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
-                const deletePromises = [];
-                querySnapshot.forEach((docSnapshot) => {
-                    deletePromises.push(deleteDoc(doc(window.firebaseDB, AS_CONFIG[category].store, docSnapshot.id)));
-                });
-                await Promise.all(deletePromises);
-                console.log(`${AS_CONFIG[category].name} 데이터 초기화 완료`);
-            } catch (error) {
-                console.error(`${AS_CONFIG[category].name} 카테고리 데이터 삭제 오류:`, error);
-                throw error;
-            } finally {
-                hideLoading();
-            }
-        }
+        async function clearCategoryInFirebase() { /* Firebase 비활성화 */ }
 
         // --- Recent Activities ---
         async function addRecentActivity(type, message, itemName) {
@@ -2452,12 +2308,16 @@
             });
             document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
 
-            // 데이터 로드 (서버 우선, 로컬 백업, Firebase 보조)
+            // 데이터 로드 (서버 우선, 로컬 백업)
             showLoading();
 
-            const localDataLoaded = loadFromLocalStorage();
+            // 로컬(IndexedDB/localStorage) 로드
+            const localDataLoaded = await loadFromStorage();
+
+            // 서버 상태 확인 및 로드 시도
             let serverLoaded = false;
-            if (navigator.onLine) {
+            const health = await checkServerHealth();
+            if (health) {
                 try {
                     await loadFromServerAllSilent();
                     serverLoaded = true;
@@ -2467,13 +2327,10 @@
                 }
             }
 
-            const firebaseInitialized = await initFirebase();
-            if (!serverLoaded && firebaseInitialized) {
-                await loadAllDataFromFirebase();
-            } else if (!serverLoaded && !localDataLoaded) {
-                showConfirm("서버/Firestore 연결에 실패했고 로컬 데이터도 없습니다. 오프라인 모드로 실행됩니다.", () => {});
+            if (!serverLoaded && !localDataLoaded) {
+                showConfirm("서버 연결에 실패했고 로컬 데이터도 없습니다. 오프라인 모드로 실행됩니다.", () => {});
             } else if (!serverLoaded && localDataLoaded) {
-                showConfirm("서버/Firestore 연결에 실패했습니다. 로컬 저장된 데이터로 실행됩니다.", () => {});
+                showConfirm("서버 연결에 실패했습니다. 로컬 저장된 데이터로 실행됩니다.", () => {});
             }
             hideLoading();
 
@@ -2497,17 +2354,12 @@
             // 온라인/오프라인 상태 모니터링
             window.addEventListener('online', async () => {
                 console.log('온라인 상태로 변경됨');
-                let refreshed = false;
-                try {
-                    await loadFromServerAllSilent();
-                    refreshed = true;
-                } catch (e) {
-                    console.warn('서버 재로드 실패:', e);
-                }
-                if (!refreshed) {
-                    const reconnected = await initFirebase();
-                    if (reconnected) {
-                        await loadAllDataFromFirebase();
+                await checkServerHealth();
+                if (serverHealthy) {
+                    try {
+                        await loadFromServerAllSilent();
+                    } catch (e) {
+                        console.warn('서버 재로드 실패:', e);
                     }
                 }
                 // 현재 화면 갱신
@@ -2525,14 +2377,8 @@
                 updateConnectionStatus(false);
             });
 
-            // Firebase ready 이벤트 리스너
-            window.addEventListener('firebaseReady', () => {
-                console.log('Firebase 준비 완료');
-                updateConnectionStatus(navigator.onLine);
-            });
-
             // 초기 연결 상태 확인
-            updateConnectionStatus(navigator.onLine && firebaseReady);
+            await checkServerHealth();
 
             // Keyboard shortcuts
             document.addEventListener('keydown', (event) => {
