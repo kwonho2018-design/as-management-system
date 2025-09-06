@@ -328,7 +328,10 @@
         };
 
         // --- Server API Config ---
-        const SERVER_BASE_URL = "https://as-management-system.onrender.com";
+        const DEFAULT_SERVER_BASE_URL = "https://as-management-system.onrender.com";
+        function getServerBaseUrl() {
+            return localStorage.getItem('as_server_base_url') || DEFAULT_SERVER_BASE_URL;
+        }
         const SERVER_FIELDS = {
             general: {
                 "NO.": "no",
@@ -443,7 +446,7 @@
         async function checkServerHealth() {
             try {
                 if (!navigator.onLine) { serverHealthy = false; updateConnectionStatus(false); return false; }
-                const res = await fetch(`${SERVER_BASE_URL}/healthz`, { cache: 'no-store' });
+                const res = await fetch(`${getServerBaseUrl()}/healthz`, { cache: 'no-store' });
                 serverHealthy = res.ok;
             } catch (e) {
                 serverHealthy = false;
@@ -534,7 +537,7 @@
         }
 
         async function serverBulkSaveCategory(category, items, clearFirst = true, withLoading = true) {
-            const url = `${SERVER_BASE_URL}/api/bulk/${category}`;
+            const url = `${getServerBaseUrl()}/api/bulk/${category}`;
             const payload = {
                 items: items.map(it => toServerItem(category, it)),
                 clearFirst
@@ -552,7 +555,7 @@
         }
 
         async function serverFetchCategory(category) {
-            const url = `${SERVER_BASE_URL}/api/data/${category}`;
+            const url = `${getServerBaseUrl()}/api/data/${category}`;
             const res = await fetch(url);
             if (!res.ok) throw new Error(`서버 불러오기 실패(${category}): ${res.status}`);
             const data = await res.json();
@@ -2375,6 +2378,19 @@
             window.addEventListener('offline', () => {
                 console.log('오프라인 상태로 변경됨');
                 updateConnectionStatus(false);
+            });
+
+            // 상태 뱃지 클릭으로 서버 URL 변경
+            const statusEl = document.getElementById('connection-status');
+            statusEl.title = '클릭하여 서버 주소 설정';
+            statusEl.style.cursor = 'pointer';
+            statusEl.addEventListener('click', async () => {
+                const current = getServerBaseUrl();
+                const next = prompt('서버 주소를 입력하세요 (예: https://as-management-system.onrender.com)', current);
+                if (next && next.trim()) {
+                    localStorage.setItem('as_server_base_url', next.trim());
+                    await checkServerHealth();
+                }
             });
 
             // 초기 연결 상태 확인
