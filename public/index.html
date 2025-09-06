@@ -451,36 +451,54 @@
                 console.log('Firebase 로드 조건 미충족:', { firebaseDB: !!window.firebaseDB, isOnline, firebaseReady });
                 return;
             }
-            
+
             showLoading();
             try {
                 const { collection, getDocs } = window.firebaseOperations;
-                
+
+                // 원격 데이터 임시 저장소 (덮어쓰기 방지)
+                const remoteData = { general: [], converter: [], floodlight: [] };
+
                 // 각 카테고리별 데이터 로드
                 for (const category of Object.keys(AS_CONFIG)) {
                     try {
                         console.log(`${AS_CONFIG[category].name} 데이터 로드 시작... 스토어: ${AS_CONFIG[category].store}`);
                         const querySnapshot = await getDocs(collection(window.firebaseDB, AS_CONFIG[category].store));
-                        appData.as[category] = [];
                         querySnapshot.forEach((doc) => {
                             const data = doc.data();
                             // ID 일관성 보장
                             data.id = data.id || doc.id;
-                            appData.as[category].push(data);
+                            remoteData[category].push(data);
                         });
-                        asReindex(category);
-                        console.log(`${AS_CONFIG[category].name} 데이터 로드 완료: ${appData.as[category].length}개`);
-                        if (appData.as[category].length === 0) {
-                            console.warn(`경고: ${AS_CONFIG[category].name} 컬렉션(${AS_CONFIG[category].store})에 데이터가 없습니다.`);
-                        }
+                        console.log(`${AS_CONFIG[category].name} 원격 로드 수: ${remoteData[category].length}개`);
                     } catch (error) {
                         console.error(`${AS_CONFIG[category].name} 데이터 로드 오류:`, error);
                         console.error(`스토어 경로: ${AS_CONFIG[category].store}`);
                     }
                 }
 
-                // Firebase 데이터 로드 후 로컬 스토리지에 백업
-                saveToLocalStorage();
+                const remoteTotal = Object.values(remoteData).reduce((sum, arr) => sum + arr.length, 0);
+                const localTotal = Object.values(appData.as).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+
+                if (remoteTotal === 0 && localTotal > 0) {
+                    // 원격이 비었고 로컬에 데이터가 있으면 로컬 → 원격 동기화 (데이터 손실 방지)
+                    console.warn('원격 컬렉션이 비어 있어 로컬 데이터를 원격으로 동기화합니다.');
+                    for (const category of Object.keys(AS_CONFIG)) {
+                        if (appData.as[category]?.length) {
+                            await saveBulkDataToFirebase(category, appData.as[category]);
+                        }
+                    }
+                    // 백업 저장
+                    saveToLocalStorage();
+                } else {
+                    // 원격 데이터를 진실 소스로 사용하고 로컬 업데이트
+                    for (const category of Object.keys(AS_CONFIG)) {
+                        appData.as[category] = remoteData[category];
+                        asReindex(category);
+                    }
+                    // Firebase 데이터 로드 후 로컬 스토리지에 백업
+                    saveToLocalStorage();
+                }
 
                 // 최근 활동 로드
                 try {
