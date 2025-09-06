@@ -446,8 +446,22 @@
         async function checkServerHealth() {
             try {
                 if (!navigator.onLine) { serverHealthy = false; updateConnectionStatus(false); return false; }
-                const res = await fetch(`${getServerBaseUrl()}/healthz`, { cache: 'no-store' });
+                const current = getServerBaseUrl();
+                let res = await fetch(`${current}/healthz`, { cache: 'no-store' });
                 serverHealthy = res.ok;
+                if (!serverHealthy) {
+                    // 현재 저장된 서버가 죽어있으면 기본 서버를 자동 시도
+                    if (current !== DEFAULT_SERVER_BASE_URL) {
+                        try {
+                            res = await fetch(`${DEFAULT_SERVER_BASE_URL}/healthz`, { cache: 'no-store' });
+                            if (res.ok) {
+                                localStorage.setItem('as_server_base_url', DEFAULT_SERVER_BASE_URL);
+                                serverHealthy = true;
+                                console.warn('서버 주소를 기본값으로 자동 복구했습니다:', DEFAULT_SERVER_BASE_URL);
+                            }
+                        } catch (_) { /* ignore */ }
+                    }
+                }
             } catch (e) {
                 serverHealthy = false;
             }
@@ -519,10 +533,16 @@
         // --- Server API Operations ---
         function toServerItem(category, item) {
             const map = SERVER_FIELDS[category];
-            const out = { id: Number(item.id), status: item.status || "incomplete" };
+            const out = { id: Math.trunc(Number(item.id) || Date.now()), status: item.status || "incomplete" };
             Object.entries(map).forEach(([kr, en]) => {
-                const val = item[kr];
-                out[en] = val == null ? "" : val;
+                let val = item[kr];
+                if (val == null || val === "") { out[en] = null; return; }
+                if (en === 'no' || en === 'quantity') {
+                    const n = parseInt(val, 10);
+                    out[en] = Number.isFinite(n) ? n : null;
+                } else {
+                    out[en] = val;
+                }
             });
             return out;
         }
@@ -1168,11 +1188,11 @@
 
                         console.log(`행 ${index + 1}: 최종 카테고리 = ${category}`);
 
-                        const cfg = AS_CONFIG[category];
-                        const newItem = { 
-                            id: Date.now() + Math.random() * 1000 + index, 
-                            status: 'incomplete' 
-                        };
+                    const cfg = AS_CONFIG[category];
+                    const newItem = { 
+                        id: Math.trunc(Date.now() + Math.random() * 1000 + index), 
+                        status: 'incomplete' 
+                    };
 
                         // 공통 필드 매핑
                         for (const header in cfg.fields) {
@@ -1756,7 +1776,7 @@
 
                     const config = AS_CONFIG[category];
                     const newItems = jsonData.map((row, index) => {
-                        const newItem = { id: Date.now() + Math.random() * 1000 + index };
+                        const newItem = { id: Math.trunc(Date.now() + Math.random() * 1000 + index) };
                         for (const header in config.fields) {
                             const key = config.fields[header];
                             let value = row[header] || '';
@@ -1976,7 +1996,7 @@
             Object.values(cfg.fields).forEach(key => {
                 if(['NO.', '완료일'].includes(key)) return;
                 const ip = document.getElementById(`modal-${key}`);
-                if(ip) item[key] = key === '수량' ? parseInt(ip.value || 0) : ip.value;
+                if(ip) item[key] = key === '수량' ? (Number.isFinite(parseInt(ip.value,10)) ? parseInt(ip.value,10) : 0) : ip.value;
             });
 
             if(isEdit){
@@ -2337,8 +2357,12 @@
             }
             hideLoading();
 
-            // Register Chart.js plugins
-            Chart.register(ChartDataLabels);
+            // Register Chart.js plugins (안전 가드)
+            try {
+                if (window.ChartDataLabels) Chart.register(ChartDataLabels);
+            } catch (e) {
+                console.warn('ChartDataLabels 등록 실패:', e);
+            }
 
             // Show dashboard by default
             showAsSubTab('dashboard');
