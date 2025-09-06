@@ -167,6 +167,12 @@
                     <button onclick="downloadHTML()" class="py-2 px-4 rounded-md btn-primary text-sm">
                         <i class="fas fa-download mr-2"></i>현재 상태 저장 (HTML)
                     </button>
+                    <button onclick="loadFromServerAll()" class="py-2 px-4 rounded-md bg-gray-600 hover:bg-gray-500 text-sm">
+                        <i class="fas fa-cloud-download-alt mr-2"></i>서버에서 불러오기
+                    </button>
+                    <button onclick="saveToServerAll()" class="py-2 px-4 rounded-md btn-green text-sm">
+                        <i class="fas fa-cloud-upload-alt mr-2"></i>서버로 저장
+                    </button>
                 </div>
             </div>
         </header>
@@ -298,6 +304,51 @@
                     '완료일': '완료일', 
                     '비고': '비고' 
                 } 
+            }
+        };
+
+        // --- Server API Config ---
+        const SERVER_BASE_URL = "https://as-management-system.onrender.com";
+        const SERVER_FIELDS = {
+            general: {
+                "NO.": "no",
+                "구분": "division",
+                "클레임NO": "claim_no",
+                "호선번호": "hull_number",
+                "불량자재코드": "defective_material_code",
+                "대체자재코드": "alternative_material_code",
+                "제품명": "product_name",
+                "수량": "quantity",
+                "접수일": "receipt_date",
+                "완료일": "completion_date",
+                "비고": "notes"
+            },
+            converter: {
+                "NO.": "no",
+                "구분": "division",
+                "클레임NO": "claim_no",
+                "호선번호": "hull_number",
+                "컨버터번호": "converter_number",
+                "컨버터코드": "converter_code",
+                "설치위치": "installation_location",
+                "제품명": "product_name",
+                "수량": "quantity",
+                "접수일": "receipt_date",
+                "완료일": "completion_date",
+                "비고": "notes"
+            },
+            floodlight: {
+                "NO.": "no",
+                "구분": "division",
+                "클레임NO": "claim_no",
+                "호선번호": "hull_number",
+                "불량자재코드": "defective_material_code",
+                "대체자재코드": "alternative_material_code",
+                "제품명": "product_name",
+                "수량": "quantity",
+                "접수일": "receipt_date",
+                "완료일": "completion_date",
+                "비고": "notes"
             }
         };
 
@@ -467,6 +518,86 @@
                 firebaseReady = false;
                 updateConnectionStatus(false);
                 return false;
+            }
+        }
+
+        // --- Server API Operations ---
+        function toServerItem(category, item) {
+            const map = SERVER_FIELDS[category];
+            const out = { id: Number(item.id), status: item.status || "incomplete" };
+            Object.entries(map).forEach(([kr, en]) => {
+                const val = item[kr];
+                out[en] = val == null ? "" : val;
+            });
+            return out;
+        }
+
+        function fromServerItem(category, obj) {
+            const map = SERVER_FIELDS[category];
+            const out = { id: obj.id, status: obj.status || "incomplete" };
+            Object.entries(map).forEach(([kr, en]) => {
+                out[kr] = obj[en] == null ? "" : obj[en];
+            });
+            return out;
+        }
+
+        async function serverBulkSaveCategory(category, items, clearFirst = true) {
+            const url = `${SERVER_BASE_URL}/api/bulk/${category}`;
+            const payload = {
+                items: items.map(it => toServerItem(category, it)),
+                clearFirst
+            };
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error(`서버 저장 실패(${category}): ${res.status}`);
+            return res.json();
+        }
+
+        async function serverFetchCategory(category) {
+            const url = `${SERVER_BASE_URL}/api/data/${category}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`서버 불러오기 실패(${category}): ${res.status}`);
+            const data = await res.json();
+            return data.map(obj => fromServerItem(category, obj));
+        }
+
+        async function saveToServerAll() {
+            showLoading();
+            try {
+                for (const category of Object.keys(AS_CONFIG)) {
+                    await serverBulkSaveCategory(category, appData.as[category], true);
+                }
+                addRecentActivity("System", "서버로 데이터 저장 완료", "");
+                showConfirm("서버로 저장이 완료되었습니다.", () => {});
+            } catch (err) {
+                console.error(err);
+                showConfirm(`서버 저장 실패: ${err.message}`, () => {});
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function loadFromServerAll() {
+            showLoading();
+            try {
+                for (const category of Object.keys(AS_CONFIG)) {
+                    const list = await serverFetchCategory(category);
+                    appData.as[category] = list;
+                    asReindex(category);
+                }
+                saveToLocalStorage();
+                renderAsDashboard();
+                if (asState.activeTab === "integrated") renderAsIntegrated();
+                else if (asState.activeTab) renderAsCategory(asState.activeTab);
+                showConfirm("서버에서 불러오기가 완료되었습니다.", () => {});
+            } catch (err) {
+                console.error(err);
+                showConfirm(`서버 불러오기 실패: ${err.message}`, () => {});
+            } finally {
+                hideLoading();
             }
         }
 
