@@ -608,8 +608,11 @@
                 }
                 saveToLocalStorage();
                 renderAsDashboard();
-                if (asState.activeTab === "integrated") renderAsIntegrated();
-                else if (asState.activeTab) renderAsCategory(asState.activeTab);
+                if (asState.activeTab === "integrated") {
+                    renderAsIntegrated();
+                } else if (asState.activeTab && asState.activeTab !== "dashboard") {
+                    renderAsCategory(asState.activeTab);
+                }
                 showConfirm("서버에서 불러오기가 완료되었습니다.", () => {});
             } catch (err) {
                 console.error(err);
